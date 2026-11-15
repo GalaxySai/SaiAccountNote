@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- ===== 语义化颜色(浅色主题) ===== -->
+    <!-- 页面背景 -->
+    <color name="page_bg">#FFFFFF</color>
+    <!-- 卡片/弹窗表面 -->
+    <color name="surface">#FFFFFF</color>
+    <!-- 次级表面(展开详情块) -->
+    <color name="surface_alt">#F7F9F9</color>
+    <!-- 输入框/搜索胶囊底色 -->
+    <color name="input_bg">#EFF3F4</color>
+    <!-- 主要文字 -->
+    <color name="text_primary">#0F1419</color>
+    <!-- 次要文字 -->
+    <color name="text_secondary">#536471</color>
+    <!-- 提示/占位文字 -->
+    <color name="text_hint">#9AA6B2</color>
+    <!-- 强调色(蓝) -->
+    <color name="accent">#1D9BF0</color>
+    <!-- 强调色的浅底(图标圆底) -->
+    <color name="accent_soft">#E8F5FD</color>
+    <!-- 分割线 -->
+    <color name="divider">#EFF3F4</color>
+    <!-- 弱化图标 -->
+    <color name="icon_muted">#AAB8C2</color>
+    <!-- 错误/危险 -->
+    <color name="danger">#E5484D</color>
+    <!-- 应用图标的自适应背景色(取自图标主色) -->
+    <color name="ic_launcher_background">#517EFD</color>
+</resources>

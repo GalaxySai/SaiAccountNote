@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 深色模式做成一组的单选,后面根据当前状态勾选 -->
+    <group android:checkableBehavior="single">
+        <item
+            android:id="@+id/drawer_theme"
+            android:icon="@drawable/ic_dark_mode_24"
+            android:title="深色模式" />
+    </group>
+
+    <item
+        android:id="@+id/drawer_export"
+        android:icon="@drawable/ic_export_24"
+        android:title="全部导出" />
+
+    <item
+        android:id="@+id/drawer_import"
+        android:icon="@drawable/ic_import_24"
+        android:title="全部导入" />
+
+    <item
+        android:id="@+id/drawer_settings"
+        android:icon="@drawable/ic_settings_24"
+        android:title="设置" />
+
+    <item
+        android:id="@+id/drawer_about"
+        android:icon="@drawable/ic_info_24"
+        android:title="关于" />
+
+</menu>

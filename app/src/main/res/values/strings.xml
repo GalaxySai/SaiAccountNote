@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">赛的密码本</string>
+    <string name="export">导出</string>
+    <string name="rename">重命名</string>
+    <string name="delete">删除</string>
+    <string name="revise">修改</string>
+    <string name="new_table">新建文件夹</string>
+    <string name="new_user">新建账号</string>
+    <string name="revise_user">修改账号</string>
+    <string name="name">名称</string>
+    <string name="confirm">确定</string>
+    <string name="cancel">取消</string>
+    <string name="show_folder">查看文件夹:</string>
+    <string name="show_user">查看账号密码:</string>
+    <string name="menu">菜单</string>
+    <string name="title">标题</string>
+    <string name="username">用户名</string>
+    <string name="password">密码</string>
+    <string name="bind_email">绑定的邮箱</string>
+    <string name="bind_phone">绑定的手机号</string>
+    <string name="notes">备注</string>
+
+    <string name="new_user_notice">以下所有的可输入项都可为空</string>
+    <string name="new_folder_name_hints">不超过20个字符</string>
+    <string name="new_user_title_hints">不超过32个字符</string>
+    <string name="new_user_username_hints">不超过32个字符</string>
+    <string name="new_user_password_hints">不超过32个字符</string>
+    <string name="new_user_bind_email_hints">建议填写完整,即包含www.和@xxx.com</string>
+    <string name="new_user_bind_phone_hints">填写绑定的手机号</string>
+    <string name="new_user_notes_hints">这里填写备注,不能超过255个字符</string>
+
+</resources>

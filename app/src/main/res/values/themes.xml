@@ -1,0 +1,12 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.SaiAccountNote" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 让 Material 组件(输入框焦点、按钮等)跟随我们的蓝色强调色 -->
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/white</item>
+    </style>
+
+    <style name="Theme.SaiAccountNote" parent="Base.Theme.SaiAccountNote" />
+</resources>
