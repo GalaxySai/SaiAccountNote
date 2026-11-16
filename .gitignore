@@ -1,22 +1,25 @@
+# Android Studio / IntelliJ
+.idea/
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
+
+# Gradle
+.gradle/
+build/
 /captures
-.externalNativeBuild
-.cxx
+
+# Local SDK path (do not commit)
 local.properties
 
-# Release 构建产物(APK / mapping)
+# Native build
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+
+# Release artifacts (do not commit)
 /app/release/
 
-# 签名文件,绝对不要提交
+# Signing files (never commit)
 *.jks
 *.keystore
