@@ -1,7 +1,7 @@
 package com.galaxysai.saiaccountnote.ui.account;
 
-import android.content.ClipData;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
@@ -29,12 +29,18 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
+import com.galaxysai.saiaccountnote.App;
 import com.galaxysai.saiaccountnote.R;
 import com.galaxysai.saiaccountnote.backup.BackupManager;
 import com.galaxysai.saiaccountnote.backup.TableExporter;
 import com.galaxysai.saiaccountnote.common.ClipboardHelper;
 import com.galaxysai.saiaccountnote.common.SecureWindow;
+import com.galaxysai.saiaccountnote.common.ShareHelper;
+import com.galaxysai.saiaccountnote.common.SimpleAdapter;
+import com.galaxysai.saiaccountnote.common.SortMode;
 import com.galaxysai.saiaccountnote.data.entity.Account;
 import com.galaxysai.saiaccountnote.data.entity.Folder;
 import com.galaxysai.saiaccountnote.repository.AccountRepository;
@@ -47,7 +53,9 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.io.OutputStream;
 import java.security.SecureRandom;
+import java.text.Collator;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -69,7 +77,16 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     private String folderName;
 
     /** 账号列表容器 */
-    private LinearLayout container;
+    private RecyclerView userRecycler;
+
+    /** 账号列表适配器 */
+    private SimpleAdapter<Account> accountAdapter;
+
+    /** 已展开详情的账号 id */
+    private final Set<Long> expandedIds = new LinkedHashSet<>();
+
+    /** 当前显示明文密码的账号 id */
+    private final Set<Long> visiblePasswordIds = new LinkedHashSet<>();
 
     /** 空状态提示 */
     private TextView tvEmpty;
@@ -85,6 +102,9 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
     /** 完整账号列表(过滤前的原始数据) */
     private List<Account> allAccounts = new ArrayList<>();
+
+    /** 账号排序模式,默认名称 A→Z */
+    private int accountSort = SortMode.NAME_ASC;
 
     /** 搜索框 */
     private EditText etSearch;
@@ -118,13 +138,13 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     this::onBatchBackupFileChosen);
 
     /** 批量导出表格:暂存选中的账号 id */
-    private List<Long> pendingBatchCsvIds;
+    private List<Long> pendingBatchXlsxIds;
 
     /** 批量导出表格保存位置 */
-    private final ActivityResultLauncher<String> createBatchCsvLauncher =
+    private final ActivityResultLauncher<String> createBatchXlsxLauncher =
             registerForActivityResult(
-                    new ActivityResultContracts.CreateDocument("text/csv"),
-                    this::onBatchCsvFileChosen);
+                    new ActivityResultContracts.CreateDocument(ShareHelper.MIME_XLSX),
+                    this::onBatchXlsxFileChosen);
 
     public long getFolderId()
     {
@@ -177,7 +197,13 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         TextView title = findViewById(R.id.user_activity_table_name);
         title.setText(folderName);
 
-        container = findViewById(R.id.user_container);
+        userRecycler = findViewById(R.id.user_recycler);
+        userRecycler.setLayoutManager(new LinearLayoutManager(this));
+        accountAdapter = new SimpleAdapter<Account>(
+                item -> R.layout.item_account,
+                this::bindAccountItem);
+        userRecycler.setAdapter(accountAdapter);
+
         tvEmpty = findViewById(R.id.tv_account_empty);
 
         // 返回
@@ -185,6 +211,11 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
         // 右上角新建账号
         findViewById(R.id.account_add).setOnClickListener(v -> showNewUserDialog());
+
+        // 排序方式
+        accountSort = getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                .getInt(App.KEY_ACCOUNT_SORT, SortMode.NAME_ASC);
+        findViewById(R.id.account_sort).setOnClickListener(v -> showAccountSortDialog());
 
         // 搜索框:输入即过滤账号
         etSearch = findViewById(R.id.et_account_search);
@@ -272,6 +303,10 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
     private void loadAccounts()
     {
+        // 重新加载列表时收起所有详情,和原来手动 addView 的行为一致
+        expandedIds.clear();
+        visiblePasswordIds.clear();
+
         if (folderId <= 0)
         {
             showAccounts();
@@ -308,7 +343,80 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             }
         }
 
+        sortAccounts();
         showAccounts();
+    }
+
+    /**
+     * 按当前排序模式给账号排序。
+     */
+    private void sortAccounts()
+    {
+        final Collator collator = Collator.getInstance(Locale.getDefault());
+        collator.setStrength(Collator.PRIMARY);
+
+        Collections.sort(accounts, (a, b) ->
+        {
+            if (accountSort == SortMode.TIME_DESC || accountSort == SortMode.TIME_ASC)
+            {
+                int result = Long.compare(a.updatedAt, b.updatedAt);
+                if (accountSort == SortMode.TIME_DESC)
+                {
+                    result = -result;
+                }
+                if (result != 0)
+                {
+                    return result;
+                }
+                return collator.compare(safeTitle(a), safeTitle(b));
+            }
+
+            int result = collator.compare(safeTitle(a), safeTitle(b));
+            if (accountSort == SortMode.NAME_DESC)
+            {
+                result = -result;
+            }
+            if (result != 0)
+            {
+                return result;
+            }
+            return Long.compare(a.id, b.id);
+        });
+    }
+
+    private String safeTitle(Account account)
+    {
+        return account.title == null ? "" : account.title;
+    }
+
+    /**
+     * 账号排序方式:名称 A→Z / Z→A,更新时间新→旧 / 旧→新。
+     */
+    private void showAccountSortDialog()
+    {
+        String[] labels = {
+                "名称 A → Z",
+                "名称 Z → A",
+                "更新时间:新 → 旧",
+                "更新时间:旧 → 新"
+        };
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("账号排序")
+                .setSingleChoiceItems(labels, accountSort, (dialog, which) ->
+                {
+                    accountSort = which;
+
+                    getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putInt(App.KEY_ACCOUNT_SORT, which)
+                            .apply();
+
+                    applyAccountFilter();
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /**
@@ -316,7 +424,6 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
      */
     private void showAccounts()
     {
-        container.removeAllViews();
         tvEmpty.setVisibility(accounts.isEmpty() ? View.VISIBLE : View.GONE);
 
         // 区分“真没有账号”和“搜索无结果”
@@ -325,117 +432,147 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 ? "还没有账号,点右上角 + 新建一个"
                 : "没有找到匹配的账号");
 
-        for (Account account : accounts)
+        accountAdapter.setItems(accounts);
+    }
+
+    /**
+     * 账号 RecyclerView 的绑定逻辑。
+     *
+     * <p>展开状态、密码显示状态、多选状态都存在 Activity 的集合里,
+     * 避免 ViewHolder 复用时把上一行的状态带过来。</p>
+     */
+    private void bindAccountItem(View row, Account account, int position)
+    {
+        LinearLayout header = row.findViewById(R.id.account_header);
+        LinearLayout detail = row.findViewById(R.id.account_detail);
+        ImageButton menu = row.findViewById(R.id.account_menu);
+        CheckBox check = row.findViewById(R.id.account_check);
+
+        TextView avatar = row.findViewById(R.id.account_avatar);
+        TextView title = row.findViewById(R.id.account_title);
+        TextView subtitle = row.findViewById(R.id.account_subtitle);
+
+        TextView tvUsername = row.findViewById(R.id.tv_detail_username);
+        TextView tvPassword = row.findViewById(R.id.tv_detail_password);
+        TextView tvToggle = row.findViewById(R.id.tv_toggle_password);
+        TextView tvCopyUsername = row.findViewById(R.id.tv_copy_username);
+        TextView tvCopyPassword = row.findViewById(R.id.tv_copy_password);
+        TextView tvEmail = row.findViewById(R.id.tv_detail_email);
+        TextView tvPhone = row.findViewById(R.id.tv_detail_phone);
+        TextView tvUrl = row.findViewById(R.id.tv_detail_url);
+        TextView tvNotes = row.findViewById(R.id.tv_detail_notes);
+
+        // 头部:首字母头像 + 标题 + 用户名
+        avatar.setText(firstLetter(account.title));
+        title.setText(account.title);
+        subtitle.setText(account.username == null || account.username.isEmpty()
+                ? "无用户名" : account.username);
+
+        // 详情
+        tvUsername.setText(safe(account.username));
+        tvEmail.setText(safe(account.email));
+        tvPhone.setText(safe(account.phone));
+        tvUrl.setText(safe(account.url));
+        tvNotes.setText(safe(account.notes));
+
+        // 一键复制用户名/密码
+        boolean hasUsername = account.username != null && !account.username.isEmpty();
+        tvCopyUsername.setVisibility(hasUsername ? View.VISIBLE : View.GONE);
+        tvCopyUsername.setOnClickListener(v ->
+                ClipboardHelper.copySensitive(this, "用户名", account.username));
+
+        boolean hasPassword = account.password != null && !account.password.isEmpty();
+        tvCopyPassword.setVisibility(hasPassword ? View.VISIBLE : View.GONE);
+        tvCopyPassword.setOnClickListener(v ->
+                ClipboardHelper.copySensitive(this, "密码", account.password));
+
+        // 密码默认打码;显示状态按账号 id 记住
+        if (!hasPassword)
         {
-            View row = LayoutInflater.from(this).inflate(R.layout.item_account, container, false);
+            tvPassword.setText("—");
+            tvToggle.setVisibility(View.GONE);
+        }
+        else
+        {
+            tvToggle.setVisibility(View.VISIBLE);
+            boolean visible = visiblePasswordIds.contains(account.id);
+            tvPassword.setText(visible ? account.password : "••••••••");
+            tvToggle.setText(visible ? "隐藏" : "显示");
 
-            LinearLayout header = row.findViewById(R.id.account_header);
-            LinearLayout detail = row.findViewById(R.id.account_detail);
-            ImageButton menu = row.findViewById(R.id.account_menu);
-            CheckBox check = row.findViewById(R.id.account_check);
-
-            TextView avatar = row.findViewById(R.id.account_avatar);
-            TextView title = row.findViewById(R.id.account_title);
-            TextView subtitle = row.findViewById(R.id.account_subtitle);
-
-            TextView tvUsername = row.findViewById(R.id.tv_detail_username);
-            TextView tvPassword = row.findViewById(R.id.tv_detail_password);
-            TextView tvToggle = row.findViewById(R.id.tv_toggle_password);
-            TextView tvCopyUsername = row.findViewById(R.id.tv_copy_username);
-            TextView tvCopyPassword = row.findViewById(R.id.tv_copy_password);
-            TextView tvEmail = row.findViewById(R.id.tv_detail_email);
-            TextView tvPhone = row.findViewById(R.id.tv_detail_phone);
-            TextView tvUrl = row.findViewById(R.id.tv_detail_url);
-            TextView tvNotes = row.findViewById(R.id.tv_detail_notes);
-
-            // 头部:首字母头像 + 标题 + 用户名
-            avatar.setText(firstLetter(account.title));
-            title.setText(account.title);
-            subtitle.setText(account.username == null || account.username.isEmpty()
-                    ? "无用户名" : account.username);
-
-            // 详情
-            tvUsername.setText(safe(account.username));
-            tvEmail.setText(safe(account.email));
-            tvPhone.setText(safe(account.phone));
-            tvUrl.setText(safe(account.url));
-            tvNotes.setText(safe(account.notes));
-
-            // 一键复制用户名/密码,60 秒后自动清剪贴板
-            boolean hasUsername = account.username != null && !account.username.isEmpty();
-            tvCopyUsername.setVisibility(hasUsername ? View.VISIBLE : View.GONE);
-            tvCopyUsername.setOnClickListener(v ->
-                    ClipboardHelper.copySensitive(this, "用户名", account.username));
-
-            boolean hasPassword = account.password != null && !account.password.isEmpty();
-            tvCopyPassword.setVisibility(hasPassword ? View.VISIBLE : View.GONE);
-            tvCopyPassword.setOnClickListener(v ->
-                    ClipboardHelper.copySensitive(this, "密码", account.password));
-
-            // 密码默认打码
-            final boolean[] passwordVisible = {false};
-            if (account.password == null || account.password.isEmpty())
+            tvToggle.setOnClickListener(v ->
             {
-                tvPassword.setText("—");
-                tvToggle.setVisibility(View.GONE);
+                if (visiblePasswordIds.contains(account.id))
+                {
+                    visiblePasswordIds.remove(account.id);
+                }
+                else
+                {
+                    visiblePasswordIds.add(account.id);
+                }
+
+                boolean nowVisible = visiblePasswordIds.contains(account.id);
+                tvPassword.setText(nowVisible ? account.password : "••••••••");
+                tvToggle.setText(nowVisible ? "隐藏" : "显示");
+            });
+        }
+
+        // 展开状态按账号 id 记住
+        detail.setVisibility(expandedIds.contains(account.id)
+                ? View.VISIBLE : View.GONE);
+
+        // 多选模式:勾选框叠在头像位置,头像字母隐藏;菜单隐藏;详情收起
+        avatar.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
+        check.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
+        check.setChecked(selectedIds.contains(account.id));
+        menu.setVisibility(selectionMode ? View.INVISIBLE : View.VISIBLE);
+        if (selectionMode)
+        {
+            detail.setVisibility(View.GONE);
+        }
+
+        // 普通模式点头部展开详情;多选模式点一下切换选中
+        header.setOnClickListener(v ->
+        {
+            if (selectionMode)
+            {
+                toggleSelection(account.id);
             }
             else
             {
-                tvPassword.setText("••••••••");
-                tvToggle.setOnClickListener(v ->
+                if (expandedIds.contains(account.id))
                 {
-                    passwordVisible[0] = !passwordVisible[0];
-                    tvPassword.setText(passwordVisible[0] ? account.password : "••••••••");
-                    tvToggle.setText(passwordVisible[0] ? "隐藏" : "显示");
-                });
-            }
+                    expandedIds.remove(account.id);
+                }
+                else
+                {
+                    expandedIds.add(account.id);
+                }
 
-            // 多选模式:显示勾选框、隐藏菜单、收起详情
-            check.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
-            check.setChecked(selectedIds.contains(account.id));
-            menu.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
+                detail.setVisibility(expandedIds.contains(account.id)
+                        ? View.VISIBLE : View.GONE);
+            }
+        });
+
+        // 长按进入多选;已多选时长按也切换选中
+        header.setOnLongClickListener(v ->
+        {
             if (selectionMode)
             {
-                detail.setVisibility(View.GONE);
+                toggleSelection(account.id);
             }
-
-            // 普通模式点头部展开详情;多选模式点一下切换选中
-            header.setOnClickListener(v ->
+            else
             {
-                if (selectionMode)
-                {
-                    toggleSelection(account.id, check);
-                }
-                else
-                {
-                    detail.setVisibility(detail.getVisibility() == View.VISIBLE
-                            ? View.GONE : View.VISIBLE);
-                }
-            });
+                enterSelectionMode(account.id);
+            }
+            return true;
+        });
 
-            // 长按进入多选;已多选时长按也切换选中
-            header.setOnLongClickListener(v ->
-            {
-                if (selectionMode)
-                {
-                    toggleSelection(account.id, check);
-                }
-                else
-                {
-                    enterSelectionMode(account.id);
-                }
-                return true;
-            });
-
-            // 菜单:修改 / 删除
-            menu.setOnClickListener(v ->
-            {
-                setTempAccount(account);
-                showPopupMenu(menu);
-            });
-
-            container.addView(row);
-        }
+        // 菜单:修改 / 移动到 / 删除
+        menu.setOnClickListener(v ->
+        {
+            setTempAccount(account);
+            showPopupMenu(menu);
+        });
     }
 
     // ==================== 多选与批量操作 ====================
@@ -465,9 +602,9 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
     /**
      * 切换一个账号的选中状态。
-     * 直接更新当前行的勾选框,避免在渲染循环里重建整个列表。
+     * RecyclerView 下由适配器重新绑定,不直接操作某个 View。
      */
-    private void toggleSelection(long accountId, CheckBox checkBox)
+    private void toggleSelection(long accountId)
     {
         if (selectedIds.contains(accountId))
         {
@@ -484,7 +621,7 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             return;
         }
 
-        checkBox.setChecked(selectedIds.contains(accountId));
+        accountAdapter.notifyDataSetChanged();
         updateSelectionUi();
     }
 
@@ -706,7 +843,7 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         content.findViewById(R.id.btn_export_table).setOnClickListener(v ->
         {
             dialog.dismiss();
-            showBatchCsvWarning();
+            showBatchTableExportOptions();
         });
 
         dialog.setOnShowListener(d ->
@@ -814,39 +951,85 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     }
 
     /**
-     * 批量导出表格前,先确认明文风险。
+     * 批量导出 Excel:先选“直接分享(不保存)”或“保存到本地”。
      */
-    private void showBatchCsvWarning()
+    private void showBatchTableExportOptions()
     {
         final List<Long> ids = selectedIdList();
 
         new MaterialAlertDialogBuilder(this)
-                .setTitle("导出表格")
+                .setTitle("导出 Excel 表格")
                 .setMessage("表格是明文,包含选中 " + ids.size()
-                        + " 个账号的密码。任何人打开都能看到,请只发给你信任的人,用完删除。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("继续", (dialog, which) ->
+                        + " 个账号的密码。\n\n"
+                        + "分享:不保存本地,直接发到微信/QQ。\n"
+                        + "保存:选一个位置存成 .xlsx 文件。")
+                .setPositiveButton("分享", (dialog, which) -> shareBatchTableDirect(ids))
+                .setNeutralButton("保存到本地", (dialog, which) ->
                 {
-                    pendingBatchCsvIds = ids;
-                    createBatchCsvLauncher.launch(
-                            "sai-selected-" + System.currentTimeMillis() + ".csv");
+                    pendingBatchXlsxIds = ids;
+                    createBatchXlsxLauncher.launch(
+                            "赛的密码本-选中-" + System.currentTimeMillis() + ".xlsx");
                 })
+                .setNegativeButton("取消", null)
                 .show();
     }
 
     /**
-     * 用户选好位置后,只把选中的账号写进 CSV。
+     * 直接生成选中账号的 XLSX 并分享,不保存本地。
      */
-    private void onBatchCsvFileChosen(Uri uri)
+    private void shareBatchTableDirect(List<Long> ids)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            byte[] data = null;
+            String error = null;
+
+            try
+            {
+                data = TableExporter.exportXlsx(this, folderId, ids);
+            }
+            catch (Exception e)
+            {
+                error = e.getMessage();
+            }
+
+            final byte[] xlsx = data;
+            final String finalError = error;
+            AppExecutors.get().main(() ->
+            {
+                if (isFinishing() || isDestroyed())
+                {
+                    return;
+                }
+
+                if (finalError != null)
+                {
+                    Toast.makeText(this,
+                            "生成表格失败: " + finalError,
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                exitSelectionMode();
+                ShareHelper.shareXlsx(this, xlsx,
+                        "赛的密码本-选中-" + System.currentTimeMillis() + ".xlsx");
+            });
+        });
+    }
+
+    /**
+     * 用户选好位置后,只把选中的账号写进 XLSX。这里只保存,不再追问分享。
+     */
+    private void onBatchXlsxFileChosen(Uri uri)
     {
         if (uri == null)
         {
-            pendingBatchCsvIds = null;
+            pendingBatchXlsxIds = null;
             return;
         }
 
-        final List<Long> ids = pendingBatchCsvIds;
-        pendingBatchCsvIds = null;
+        final List<Long> ids = pendingBatchXlsxIds;
+        pendingBatchXlsxIds = null;
 
         if (ids == null || ids.isEmpty())
         {
@@ -864,7 +1047,7 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     throw new IllegalStateException("无法写入文件");
                 }
 
-                byte[] data = TableExporter.exportCsv(this, folderId, ids);
+                byte[] data = TableExporter.exportXlsx(this, folderId, ids);
                 out.write(data);
                 out.flush();
             }
@@ -883,40 +1066,17 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
                 if (finalError == null)
                 {
-                    Toast.makeText(this,
-                            "已导出 " + ids.size() + " 个账号",
-                            Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "已保存到本地", Toast.LENGTH_LONG).show();
                     exitSelectionMode();
-                    showBatchCsvShareDialog(uri);
                 }
                 else
                 {
                     Toast.makeText(this,
-                            "导出失败: " + finalError,
+                            "保存失败: " + finalError,
                             Toast.LENGTH_LONG).show();
                 }
             });
         });
-    }
-
-    private void showBatchCsvShareDialog(Uri uri)
-    {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("表格已导出")
-                .setMessage("是否现在分享到微信/QQ?")
-                .setNegativeButton("完成", null)
-                .setPositiveButton("分享", (dialog, which) -> shareCsv(uri))
-                .show();
-    }
-
-    private void shareCsv(Uri uri)
-    {
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("text/csv");
-        send.putExtra(Intent.EXTRA_STREAM, uri);
-        send.setClipData(ClipData.newRawUri("accounts.csv", uri));
-        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(send, "分享表格"));
     }
 
     private String generateRandomPassword()

@@ -23,3 +23,4 @@ local.properties
 # Signing files (never commit)
 *.jks
 *.keystore
+keystore.properties

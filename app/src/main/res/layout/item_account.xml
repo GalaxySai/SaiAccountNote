@@ -24,17 +24,6 @@
         android:paddingStart="16dp"
         android:paddingEnd="8dp">
 
-        <!-- 多选模式的勾选框,平时隐藏 -->
-        <CheckBox
-            android:id="@+id/account_check"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:buttonTint="@color/accent"
-            android:clickable="false"
-            android:focusable="false"
-            android:visibility="gone" />
-
         <FrameLayout
             android:layout_width="44dp"
             android:layout_height="44dp"
@@ -49,6 +38,26 @@
                 android:textColor="@color/accent"
                 android:textSize="18sp"
                 android:textStyle="bold" />
+
+            <!--
+                多选勾选框:叠在头像位置,不占额外宽度;
+                background=@null 去掉默认涟漪,避免那圈淡阴影。
+            -->
+            <CheckBox
+                android:id="@+id/account_check"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:background="@null"
+                android:buttonTint="@color/accent"
+                android:clickable="false"
+                android:focusable="false"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:padding="0dp"
+                android:scaleX="0.9"
+                android:scaleY="0.9"
+                android:visibility="gone" />
         </FrameLayout>
 
         <LinearLayout

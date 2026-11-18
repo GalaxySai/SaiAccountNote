@@ -92,14 +92,14 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="end"
-        android:text="导出成表格"
+        android:text="导出成 Excel"
         android:textColor="@color/accent" />
 
     <TextView
         android:id="@+id/tv_table_hint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="表格为明文,可用 Excel / WPS 打开"
+        android:text="Excel (.xlsx) 格式,可用 Excel / WPS 打开"
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 

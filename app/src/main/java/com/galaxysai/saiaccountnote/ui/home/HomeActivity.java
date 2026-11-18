@@ -3,8 +3,11 @@ package com.galaxysai.saiaccountnote.ui.home;
 import com.galaxysai.saiaccountnote.App;
 import com.galaxysai.saiaccountnote.R;
 import com.galaxysai.saiaccountnote.backup.BackupManager;
+import com.galaxysai.saiaccountnote.backup.BackupStatus;
 import com.galaxysai.saiaccountnote.backup.TableExporter;
 import com.galaxysai.saiaccountnote.common.SecureWindow;
+import com.galaxysai.saiaccountnote.common.ShareHelper;
+import com.galaxysai.saiaccountnote.common.SortMode;
 
 import android.content.ClipData;
 import android.content.ClipDescription;
@@ -43,6 +46,8 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.galaxysai.saiaccountnote.data.entity.Account;
 import com.galaxysai.saiaccountnote.data.entity.Folder;
@@ -53,6 +58,7 @@ import com.galaxysai.saiaccountnote.security.SessionManager;
 import com.galaxysai.saiaccountnote.ui.account.UserActivity;
 import com.galaxysai.saiaccountnote.ui.settings.SettingsActivity;
 import com.galaxysai.saiaccountnote.ui.unlock.UnlockActivity;
+import com.galaxysai.saiaccountnote.common.SimpleAdapter;
 import com.google.android.material.checkbox.MaterialCheckBox;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.navigation.NavigationView;
@@ -62,8 +68,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.text.Collator;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -86,14 +94,23 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     /** 完整文件夹列表(过滤前的原始数据) */
     private List<Folder> allFolders = new ArrayList<>();
 
+    /** 文件夹排序模式,默认名称 A→Z */
+    private int folderSort = SortMode.NAME_ASC;
+
     /** 搜索框 */
     private EditText etSearch;
 
     /** 文件夹行的容器 */
-    private LinearLayout container;
+    private RecyclerView homeRecycler;
+
+    /** 首页列表适配器:文件夹 + 账号搜索结果 */
+    private SimpleAdapter<HomeItem> homeAdapter;
 
     /** 空状态提示 */
     private TextView tvEmpty;
+
+    /** 备份状态:上次完整备份时间 + 之后是否有变更 */
+    private TextView tvBackupStatus;
 
     /** 点击某个文件夹的菜单时,先记住它的名字 */
     private String tempTableName;
@@ -141,13 +158,13 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     this::onBackupFileSelected);
 
     /** 表格导出范围:null 表示全部;否则只导出该文件夹 */
-    private Long pendingCsvFolderId;
+    private Long pendingXlsxFolderId;
 
     /** 选择表格保存位置 */
-    private final ActivityResultLauncher<String> createCsvLauncher =
+    private final ActivityResultLauncher<String> createXlsxLauncher =
             registerForActivityResult(
-                    new ActivityResultContracts.CreateDocument("text/csv"),
-                    this::onCsvFileChosen);
+                    new ActivityResultContracts.CreateDocument(ShareHelper.MIME_XLSX),
+                    this::onXlsxFileChosen);
 
     /** 主题切换会重建 Activity,用这个标记让重建后自动重新打开侧边栏 */
     private static boolean reopenDrawerAfterThemeChange = false;
@@ -182,8 +199,27 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         // 先处理系统栏,再绑定其它控件
         applySystemBarInsets();
 
-        container = findViewById(R.id.home_table_container);
+        homeRecycler = findViewById(R.id.home_recycler);
+        homeRecycler.setLayoutManager(new LinearLayoutManager(this));
+        homeAdapter = new SimpleAdapter<HomeItem>(
+                item ->
+                {
+                    if (item.folder != null)
+                    {
+                        return R.layout.item_folder;
+                    }
+                    if (item.account != null)
+                    {
+                        return R.layout.item_search_account;
+                    }
+                    return R.layout.item_section_header;
+                },
+                this::bindHomeItem);
+        homeRecycler.setAdapter(homeAdapter);
+
         tvEmpty = findViewById(R.id.tv_empty);
+        tvBackupStatus = findViewById(R.id.tv_backup_status);
+        tvBackupStatus.setOnClickListener(v -> showExportDialog(null));
 
         // 侧边栏
         drawerLayout = findViewById(R.id.drawer_root);
@@ -203,6 +239,11 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
         // 右上角新建文件夹
         findViewById(R.id.home_add).setOnClickListener(v -> showNewFolderDialog());
+
+        // 排序方式
+        folderSort = getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                .getInt(App.KEY_FOLDER_SORT, SortMode.NAME_ASC);
+        findViewById(R.id.home_sort).setOnClickListener(v -> showFolderSortDialog());
 
         // 搜索框:输入即过滤文件夹
         etSearch = findViewById(R.id.et_home_search);
@@ -391,11 +432,11 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 .setPositiveButton("选择保存位置", null)
                 .create();
 
-        // 表格导出:放在明文导出旁边,点击后走 CSV 保存流程
+        // 表格导出:放在明文导出旁边,点击后走 Excel 保存/分享流程
         content.findViewById(R.id.btn_export_table).setOnClickListener(v ->
         {
             dialog.dismiss();
-            showCsvWarning(folderId);
+            showTableExportOptions(folderId);
         });
 
         dialog.setOnShowListener(d ->
@@ -460,6 +501,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
         AppExecutors.get().diskIO(() ->
         {
+            boolean written = false;
             String error = null;
 
             try (OutputStream out = getContentResolver().openOutputStream(uri))
@@ -472,10 +514,17 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 byte[] data = BackupManager.exportData(this, encrypt, password, folderId);
                 out.write(data);
                 out.flush();
+                written = true;
             }
             catch (Exception e)
             {
                 error = e.getMessage();
+            }
+
+            // 文件真正写完(包含关闭流)后,才更新“上次备份”状态
+            if (written && folderId == null)
+            {
+                BackupStatus.markBackedUp(this);
             }
 
             final String finalError = error;
@@ -486,6 +535,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     Toast.makeText(this,
                             folderId == null ? "导出成功" : "文件夹导出成功",
                             Toast.LENGTH_LONG).show();
+                    refreshBackupStatus();
                 }
                 else
                 {
@@ -496,35 +546,75 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     }
 
     /**
-     * 导出表格(CSV):先提醒明文风险,再选保存位置。
+     * 导出 Excel 表格:先选“直接分享(不保存)”或“保存到本地”。
      */
-    private void showCsvWarning(Long folderId)
+    private void showTableExportOptions(Long folderId)
     {
         new MaterialAlertDialogBuilder(this)
-                .setTitle("导出表格")
-                .setMessage("表格是明文,包含所有密码。任何人打开都能看到,请只发给你信任的人,用完删除。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("继续", (dialog, which) ->
+                .setTitle("导出 Excel 表格")
+                .setMessage("表格是明文,包含所有密码。\n\n"
+                        + "分享:不保存本地,直接发到微信/QQ。\n"
+                        + "保存:选一个位置存成 .xlsx 文件。")
+                .setPositiveButton("分享", (dialog, which) -> shareTableDirect(folderId))
+                .setNeutralButton("保存到本地", (dialog, which) ->
                 {
-                    pendingCsvFolderId = folderId;
-                    createCsvLauncher.launch(
-                            "sai-accounts-" + timestampForFileName() + ".csv");
+                    pendingXlsxFolderId = folderId;
+                    createXlsxLauncher.launch(
+                            "赛的密码本-" + timestampForFileName() + ".xlsx");
                 })
+                .setNegativeButton("取消", null)
                 .show();
     }
 
     /**
-     * 用户选好表格保存位置后,在后台写入 CSV。
+     * 直接生成 XLSX 并分享,不经过本地文件选择器。
      */
-    private void onCsvFileChosen(Uri uri)
+    private void shareTableDirect(Long folderId)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            byte[] data = null;
+            String error = null;
+
+            try
+            {
+                data = TableExporter.exportXlsx(this, folderId, null);
+            }
+            catch (Exception e)
+            {
+                error = e.getMessage();
+            }
+
+            final byte[] xlsx = data;
+            final String finalError = error;
+            AppExecutors.get().main(() ->
+            {
+                if (finalError != null)
+                {
+                    Toast.makeText(this,
+                            "生成表格失败: " + finalError,
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                ShareHelper.shareXlsx(this, xlsx,
+                        "赛的密码本-" + timestampForFileName() + ".xlsx");
+            });
+        });
+    }
+
+    /**
+     * 用户选好保存位置后,在后台写入 XLSX。这里只保存,不再追问分享。
+     */
+    private void onXlsxFileChosen(Uri uri)
     {
         if (uri == null)
         {
             return;
         }
 
-        final Long folderId = pendingCsvFolderId;
-        pendingCsvFolderId = null;
+        final Long folderId = pendingXlsxFolderId;
+        pendingXlsxFolderId = null;
 
         AppExecutors.get().diskIO(() ->
         {
@@ -537,7 +627,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     throw new IllegalStateException("无法写入文件");
                 }
 
-                byte[] data = TableExporter.exportCsv(this, folderId, null);
+                byte[] data = TableExporter.exportXlsx(this, folderId, null);
                 out.write(data);
                 out.flush();
             }
@@ -551,36 +641,16 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             {
                 if (finalError == null)
                 {
-                    showCsvShareDialog(uri);
+                    Toast.makeText(this, "已保存到本地", Toast.LENGTH_LONG).show();
                 }
                 else
                 {
                     Toast.makeText(this,
-                            "导出失败: " + finalError,
+                            "保存失败: " + finalError,
                             Toast.LENGTH_LONG).show();
                 }
             });
         });
-    }
-
-    private void showCsvShareDialog(Uri uri)
-    {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("表格已导出")
-                .setMessage("是否现在分享到微信/QQ?")
-                .setNegativeButton("完成", null)
-                .setPositiveButton("分享", (dialog, which) -> shareCsv(uri))
-                .show();
-    }
-
-    private void shareCsv(Uri uri)
-    {
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("text/csv");
-        send.putExtra(Intent.EXTRA_STREAM, uri);
-        send.setClipData(ClipData.newRawUri("accounts.csv", uri));
-        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(send, "分享表格"));
     }
 
     /**
@@ -903,7 +973,98 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             }
         }
 
+        sortFolders();
         showTables();
+        refreshBackupStatus();
+    }
+
+    /**
+     * 按当前排序模式给文件夹排序。
+     */
+    private void sortFolders()
+    {
+        final Collator collator = Collator.getInstance(Locale.getDefault());
+        collator.setStrength(Collator.PRIMARY);
+
+        Collections.sort(folders, (a, b) ->
+        {
+            if (folderSort == SortMode.TIME_DESC || folderSort == SortMode.TIME_ASC)
+            {
+                int result = Long.compare(a.createdAt, b.createdAt);
+                if (folderSort == SortMode.TIME_DESC)
+                {
+                    result = -result;
+                }
+                if (result != 0)
+                {
+                    return result;
+                }
+                return collator.compare(safeFolderName(a), safeFolderName(b));
+            }
+
+            int result = collator.compare(safeFolderName(a), safeFolderName(b));
+            if (folderSort == SortMode.NAME_DESC)
+            {
+                result = -result;
+            }
+            if (result != 0)
+            {
+                return result;
+            }
+            return Long.compare(a.id, b.id);
+        });
+    }
+
+    private String safeFolderName(Folder folder)
+    {
+        return folder.name == null ? "" : folder.name;
+    }
+
+    /**
+     * 文件夹排序方式:名称 A→Z / Z→A,创建时间新→旧 / 旧→新。
+     */
+    private void showFolderSortDialog()
+    {
+        String[] labels = {
+                "名称 A → Z",
+                "名称 Z → A",
+                "创建时间:新 → 旧",
+                "创建时间:旧 → 新"
+        };
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("文件夹排序")
+                .setSingleChoiceItems(labels, folderSort, (dialog, which) ->
+                {
+                    folderSort = which;
+
+                    getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putInt(App.KEY_FOLDER_SORT, which)
+                            .apply();
+
+                    applyFolderFilter();
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /**
+     * 刷新首页的备份状态提示。
+     */
+    private void refreshBackupStatus()
+    {
+        if (tvBackupStatus == null)
+        {
+            return;
+        }
+
+        BackupStatus.Result result = BackupStatus.evaluate(this, allFolders, allAccounts);
+        tvBackupStatus.setText(result.text);
+        tvBackupStatus.setTextColor(getColor(result.needsBackup
+                ? R.color.danger
+                : R.color.text_secondary));
     }
 
     /**
@@ -911,8 +1072,6 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
      */
     private void showTables()
     {
-        container.removeAllViews();
-
         String query = etSearch == null ? "" : etSearch.getText().toString().trim();
         boolean hasResults = !folders.isEmpty() || !searchAccounts.isEmpty();
 
@@ -927,17 +1086,51 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         folderSection.setVisibility(query.isEmpty() || !folders.isEmpty()
                 ? View.VISIBLE : View.GONE);
 
+        List<HomeItem> items = new ArrayList<>();
+
         for (Folder folder : folders)
         {
-            View row = LayoutInflater.from(this).inflate(R.layout.item_folder, container, false);
+            items.add(HomeItem.folder(folder));
+        }
 
-            TextView name = row.findViewById(R.id.tv_folder_name);
-            ImageButton menu = row.findViewById(R.id.iv_folder_menu);
+        if (!searchAccounts.isEmpty())
+        {
+            items.add(HomeItem.section("账号"));
 
+            Map<Long, String> folderNames = new HashMap<>();
+            for (Folder folder : allFolders)
+            {
+                folderNames.put(folder.id, folder.name);
+            }
+
+            for (Account account : searchAccounts)
+            {
+                String folderName = folderNames.get(account.folderId);
+                if (folderName == null)
+                {
+                    folderName = "未知文件夹";
+                }
+                items.add(HomeItem.account(account, folderName));
+            }
+        }
+
+        homeAdapter.setItems(items);
+    }
+
+    /**
+     * 首页 RecyclerView 的绑定逻辑:文件夹行 / 账号搜索结果 / “账号”分组标题。
+     */
+    private void bindHomeItem(View itemView, HomeItem item, int position)
+    {
+        if (item.folder != null)
+        {
+            Folder folder = item.folder;
+
+            TextView name = itemView.findViewById(R.id.tv_folder_name);
+            ImageButton menu = itemView.findViewById(R.id.iv_folder_menu);
             name.setText(folder.name);
 
-            // 整行点击 → 进入账号列表
-            row.setOnClickListener(v ->
+            itemView.setOnClickListener(v ->
             {
                 Intent intent = new Intent(this, UserActivity.class);
                 intent.putExtra("folderId", folder.id);
@@ -945,70 +1138,78 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 startActivity(intent);
             });
 
-            // 右侧菜单 → 重命名 / 删除 / 导出
             menu.setOnClickListener(v ->
             {
                 tempFolderId = folder.id;
                 setTempTableName(folder.name);
                 showPopupMenu(menu);
             });
-
-            container.addView(row);
-        }
-
-        if (searchAccounts.isEmpty())
-        {
             return;
         }
 
-        // 账号分组标题
-        View header = LayoutInflater.from(this)
-                .inflate(R.layout.item_section_header, container, false);
-        TextView headerTitle = header.findViewById(R.id.tv_section_title);
-        headerTitle.setText("账号");
-        container.addView(header);
-
-        // 文件夹 id → 名字,给账号结果做副标题
-        Map<Long, String> folderNames = new HashMap<>();
-        for (Folder folder : allFolders)
+        if (item.account != null)
         {
-            folderNames.put(folder.id, folder.name);
-        }
+            Account account = item.account;
 
-        for (Account account : searchAccounts)
-        {
-            View row = LayoutInflater.from(this)
-                    .inflate(R.layout.item_search_account, container, false);
-
-            TextView avatar = row.findViewById(R.id.tv_search_avatar);
-            TextView title = row.findViewById(R.id.tv_search_title);
-            TextView subtitle = row.findViewById(R.id.tv_search_subtitle);
+            TextView avatar = itemView.findViewById(R.id.tv_search_avatar);
+            TextView title = itemView.findViewById(R.id.tv_search_title);
+            TextView subtitle = itemView.findViewById(R.id.tv_search_subtitle);
 
             String titleText = (account.title == null || account.title.trim().isEmpty())
                     ? "未命名账号" : account.title;
             String username = account.username == null ? "" : account.username.trim();
-            String folderName = folderNames.get(account.folderId);
-            if (folderName == null)
-            {
-                folderName = "未知文件夹";
-            }
 
             avatar.setText(firstLetter(titleText));
             title.setText(titleText);
             subtitle.setText(username.isEmpty()
-                    ? folderName
-                    : username + " · " + folderName);
+                    ? item.folderName
+                    : username + " · " + item.folderName);
 
-            final String targetFolderName = folderName;
-            row.setOnClickListener(v ->
+            itemView.setOnClickListener(v ->
             {
                 Intent intent = new Intent(this, UserActivity.class);
                 intent.putExtra("folderId", account.folderId);
-                intent.putExtra("folderName", targetFolderName);
+                intent.putExtra("folderName", item.folderName);
                 startActivity(intent);
             });
+            return;
+        }
 
-            container.addView(row);
+        TextView header = itemView.findViewById(R.id.tv_section_title);
+        header.setText(item.section);
+    }
+
+    /**
+     * 首页列表项:文件夹 / 账号搜索结果 / 分组标题三选一。
+     */
+    private static final class HomeItem
+    {
+        final Folder folder;
+        final Account account;
+        final String section;
+        final String folderName;
+
+        private HomeItem(Folder folder, Account account, String section, String folderName)
+        {
+            this.folder = folder;
+            this.account = account;
+            this.section = section;
+            this.folderName = folderName;
+        }
+
+        static HomeItem folder(Folder folder)
+        {
+            return new HomeItem(folder, null, null, null);
+        }
+
+        static HomeItem account(Account account, String folderName)
+        {
+            return new HomeItem(null, account, null, folderName);
+        }
+
+        static HomeItem section(String section)
+        {
+            return new HomeItem(null, null, section, null);
         }
     }
 

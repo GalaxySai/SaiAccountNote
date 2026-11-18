@@ -11,6 +11,7 @@ room = "2.6.1"
 sqlcipher = "4.6.1"
 biometric = "1.1.0"
 drawerlayout = "1.2.0"
+recyclerview = "1.3.2"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -25,6 +26,7 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
 biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 drawerlayout = { group = "androidx.drawerlayout", name = "drawerlayout", version.ref = "drawerlayout" }
+recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

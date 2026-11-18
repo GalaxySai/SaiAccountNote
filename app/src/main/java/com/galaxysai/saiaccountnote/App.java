@@ -28,6 +28,12 @@ public class App extends Application
     /** 自动锁定时间(分钟),默认 5 分钟 */
     public static final String KEY_AUTO_LOCK_MINUTES = "auto_lock_minutes";
 
+    /** 文件夹排序模式 */
+    public static final String KEY_FOLDER_SORT = "folder_sort";
+
+    /** 账号排序模式 */
+    public static final String KEY_ACCOUNT_SORT = "account_sort";
+
     @Override
     public void onCreate()
     {

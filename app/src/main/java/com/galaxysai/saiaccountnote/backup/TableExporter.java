@@ -6,7 +6,6 @@ import com.galaxysai.saiaccountnote.data.AppDatabase;
 import com.galaxysai.saiaccountnote.data.entity.Account;
 import com.galaxysai.saiaccountnote.data.entity.Folder;
 
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,11 +19,11 @@ import java.util.Set;
 
 
 /**
- * 把账号导出成人类可读的 CSV 表格。
+ * 把账号导出成人类可读的 XLSX 表格。
  *
  * <p>可以用 Excel、WPS、Google Sheets 直接打开。</p>
  *
- * <p>注意:CSV 是明文,包含密码,分享前请确认对象可信。</p>
+ * <p>注意:表格是明文,包含密码,分享前请确认对象可信。</p>
  */
 public final class TableExporter
 {
@@ -34,13 +33,13 @@ public final class TableExporter
     }
 
     /**
-     * 生成 CSV 内容(UTF-8 带 BOM,Excel 打开中文不乱码)。
+     * 生成 XLSX 表格字节。
      *
      * @param folderId   只导出该文件夹;传 null 表示全部
      * @param accountIds 只导出这些账号;传 null 表示不按账号限制
      */
-    public static byte[] exportCsv(Context context, Long folderId,
-                                   List<Long> accountIds) throws Exception
+    public static byte[] exportXlsx(Context context, Long folderId,
+                                    List<Long> accountIds) throws Exception
     {
         AppDatabase db = AppDatabase.get(context);
 
@@ -123,11 +122,11 @@ public final class TableExporter
         SimpleDateFormat dateFormat =
                 new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
 
-        StringBuilder builder = new StringBuilder();
-
-        // UTF-8 BOM:Excel 打开时中文不乱码
-        builder.append('\uFEFF');
-        builder.append("文件夹,标题,用户名,密码,网址,邮箱,手机,备注,创建时间,更新时间\r\n");
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{
+                "文件夹", "标题", "用户名", "密码", "网址",
+                "邮箱", "手机", "备注", "创建时间", "更新时间"
+        });
 
         for (Account account : sorted)
         {
@@ -137,19 +136,21 @@ public final class TableExporter
                 folderName = "";
             }
 
-            builder.append(csv(folderName)).append(',')
-                    .append(csv(account.title)).append(',')
-                    .append(csv(account.username)).append(',')
-                    .append(csv(account.password)).append(',')
-                    .append(csv(account.url)).append(',')
-                    .append(csv(account.email)).append(',')
-                    .append(csv(account.phone)).append(',')
-                    .append(csv(account.notes)).append(',')
-                    .append(csv(formatDate(dateFormat, account.createdAt))).append(',')
-                    .append(csv(formatDate(dateFormat, account.updatedAt))).append("\r\n");
+            rows.add(new String[]{
+                    folderName,
+                    account.title,
+                    account.username,
+                    account.password,
+                    account.url,
+                    account.email,
+                    account.phone,
+                    account.notes,
+                    formatDate(dateFormat, account.createdAt),
+                    formatDate(dateFormat, account.updatedAt)
+            });
         }
 
-        return builder.toString().getBytes(StandardCharsets.UTF_8);
+        return XlsxWriter.write(rows);
     }
 
     private static String formatDate(SimpleDateFormat format, long millis)
@@ -159,24 +160,5 @@ public final class TableExporter
             return "";
         }
         return format.format(new Date(millis));
-    }
-
-    /**
-     * CSV 转义:字段里有逗号、引号、换行时用双引号包起来,内部引号翻倍。
-     */
-    private static String csv(String value)
-    {
-        if (value == null)
-        {
-            return "";
-        }
-
-        String escaped = value.replace("\"", "\"\"");
-        if (escaped.contains(",") || escaped.contains("\"")
-                || escaped.contains("\n") || escaped.contains("\r"))
-        {
-            return "\"" + escaped + "\"";
-        }
-        return escaped;
     }
 }

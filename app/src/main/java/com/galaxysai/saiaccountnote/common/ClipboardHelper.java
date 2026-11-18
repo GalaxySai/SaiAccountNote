@@ -17,7 +17,9 @@ import android.widget.Toast;
  * <p>复制密码等敏感内容时:</p>
  * <ul>
  *     <li>Android 13+ 标记为敏感内容,避免在剪贴板预览里明文显示;</li>
- *     <li>60 秒后自动清除,前提是剪贴板里还是这次复制的内容。</li>
+ *     <li>60 秒后把系统剪贴板替换成占位文本,而不是只做 clear;</li>
+ *     <li>部分输入法(如搜狗)会自己保存剪贴板历史,App 无法清除,
+ *         介意的话可在输入法设置里关闭剪贴板历史/同步。</li>
  * </ul>
  */
 public final class ClipboardHelper
@@ -86,14 +88,10 @@ public final class ClipboardHelper
                 return;
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-            {
-                manager.clearPrimaryClip();
-            }
-            else
-            {
-                manager.setPrimaryClip(ClipData.newPlainText("", ""));
-            }
+            // 用占位文本替换,而不是单纯 clear:
+            // 部分输入法会保存自己的剪贴板历史,clear 对它们无效;
+            // 替换后至少系统剪贴板里不再保留密码。
+            manager.setPrimaryClip(ClipData.newPlainText("", "已自动清除"));
         }, CLEAR_DELAY_MS);
     }
 }
