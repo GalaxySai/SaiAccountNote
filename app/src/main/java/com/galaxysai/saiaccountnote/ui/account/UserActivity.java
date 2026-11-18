@@ -1,13 +1,16 @@
 package com.galaxysai.saiaccountnote.ui.account;
 
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -16,7 +19,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -25,15 +31,27 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.galaxysai.saiaccountnote.R;
+import com.galaxysai.saiaccountnote.backup.BackupManager;
+import com.galaxysai.saiaccountnote.backup.TableExporter;
+import com.galaxysai.saiaccountnote.common.ClipboardHelper;
 import com.galaxysai.saiaccountnote.common.SecureWindow;
 import com.galaxysai.saiaccountnote.data.entity.Account;
+import com.galaxysai.saiaccountnote.data.entity.Folder;
 import com.galaxysai.saiaccountnote.repository.AccountRepository;
+import com.galaxysai.saiaccountnote.repository.AppExecutors;
+import com.galaxysai.saiaccountnote.repository.FolderRepository;
 import com.galaxysai.saiaccountnote.security.SessionManager;
 import com.galaxysai.saiaccountnote.ui.unlock.UnlockActivity;
+import com.google.android.material.checkbox.MaterialCheckBox;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import java.io.OutputStream;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 
 /**
@@ -59,6 +77,9 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     /** 账号数据入口 */
     private AccountRepository accountRepository;
 
+    /** 文件夹数据入口,移动账号时用来选目标文件夹 */
+    private FolderRepository folderRepository;
+
     /** 当前展示的账号列表(过滤后的) */
     private List<Account> accounts = new ArrayList<>();
 
@@ -70,6 +91,40 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
     /** 当前选中的账号,供修改/删除使用 */
     private Account tempAccount;
+
+    /** 是否处于多选模式 */
+    private boolean selectionMode;
+
+    /** 当前选中的账号 id */
+    private final Set<Long> selectedIds = new LinkedHashSet<>();
+
+    /** 多选相关控件 */
+    private View topBar;
+    private View searchBar;
+    private View selectionBar;
+    private View selectionActionsDivider;
+    private View selectionActions;
+    private TextView selectionCount;
+    private TextView selectionAll;
+
+    /** 批量导出:暂存的加密选项和密码 */
+    private boolean pendingBatchEncrypt;
+    private String pendingBatchPassword;
+
+    /** 批量导出保存位置 */
+    private final ActivityResultLauncher<String> createBatchBackupLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.CreateDocument("application/json"),
+                    this::onBatchBackupFileChosen);
+
+    /** 批量导出表格:暂存选中的账号 id */
+    private List<Long> pendingBatchCsvIds;
+
+    /** 批量导出表格保存位置 */
+    private final ActivityResultLauncher<String> createBatchCsvLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.CreateDocument("text/csv"),
+                    this::onBatchCsvFileChosen);
 
     public long getFolderId()
     {
@@ -153,6 +208,24 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         });
 
         accountRepository = new AccountRepository(this);
+        folderRepository = new FolderRepository(this);
+
+        // 多选相关控件
+        topBar = findViewById(R.id.account_top_bar);
+        searchBar = findViewById(R.id.account_search_bar);
+        selectionBar = findViewById(R.id.selection_bar);
+        selectionActionsDivider = findViewById(R.id.selection_actions_divider);
+        selectionActions = findViewById(R.id.selection_actions);
+        selectionCount = findViewById(R.id.selection_count);
+        selectionAll = findViewById(R.id.selection_all);
+
+        findViewById(R.id.selection_close).setOnClickListener(v -> exitSelectionMode());
+        selectionAll.setOnClickListener(v -> toggleSelectAll());
+        findViewById(R.id.btn_batch_move).setOnClickListener(v -> batchMove());
+        findViewById(R.id.btn_batch_delete).setOnClickListener(v -> batchDelete());
+        findViewById(R.id.btn_batch_export).setOnClickListener(v -> batchExport());
+
+        updateSelectionUi();
         loadAccounts();
     }
 
@@ -259,6 +332,7 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             LinearLayout header = row.findViewById(R.id.account_header);
             LinearLayout detail = row.findViewById(R.id.account_detail);
             ImageButton menu = row.findViewById(R.id.account_menu);
+            CheckBox check = row.findViewById(R.id.account_check);
 
             TextView avatar = row.findViewById(R.id.account_avatar);
             TextView title = row.findViewById(R.id.account_title);
@@ -267,6 +341,8 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             TextView tvUsername = row.findViewById(R.id.tv_detail_username);
             TextView tvPassword = row.findViewById(R.id.tv_detail_password);
             TextView tvToggle = row.findViewById(R.id.tv_toggle_password);
+            TextView tvCopyUsername = row.findViewById(R.id.tv_copy_username);
+            TextView tvCopyPassword = row.findViewById(R.id.tv_copy_password);
             TextView tvEmail = row.findViewById(R.id.tv_detail_email);
             TextView tvPhone = row.findViewById(R.id.tv_detail_phone);
             TextView tvUrl = row.findViewById(R.id.tv_detail_url);
@@ -284,6 +360,17 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             tvPhone.setText(safe(account.phone));
             tvUrl.setText(safe(account.url));
             tvNotes.setText(safe(account.notes));
+
+            // 一键复制用户名/密码,60 秒后自动清剪贴板
+            boolean hasUsername = account.username != null && !account.username.isEmpty();
+            tvCopyUsername.setVisibility(hasUsername ? View.VISIBLE : View.GONE);
+            tvCopyUsername.setOnClickListener(v ->
+                    ClipboardHelper.copySensitive(this, "用户名", account.username));
+
+            boolean hasPassword = account.password != null && !account.password.isEmpty();
+            tvCopyPassword.setVisibility(hasPassword ? View.VISIBLE : View.GONE);
+            tvCopyPassword.setOnClickListener(v ->
+                    ClipboardHelper.copySensitive(this, "密码", account.password));
 
             // 密码默认打码
             final boolean[] passwordVisible = {false};
@@ -303,10 +390,42 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 });
             }
 
-            // 点击头部展开/收起详情
+            // 多选模式:显示勾选框、隐藏菜单、收起详情
+            check.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
+            check.setChecked(selectedIds.contains(account.id));
+            menu.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
+            if (selectionMode)
+            {
+                detail.setVisibility(View.GONE);
+            }
+
+            // 普通模式点头部展开详情;多选模式点一下切换选中
             header.setOnClickListener(v ->
+            {
+                if (selectionMode)
+                {
+                    toggleSelection(account.id, check);
+                }
+                else
+                {
                     detail.setVisibility(detail.getVisibility() == View.VISIBLE
-                            ? View.GONE : View.VISIBLE));
+                            ? View.GONE : View.VISIBLE);
+                }
+            });
+
+            // 长按进入多选;已多选时长按也切换选中
+            header.setOnLongClickListener(v ->
+            {
+                if (selectionMode)
+                {
+                    toggleSelection(account.id, check);
+                }
+                else
+                {
+                    enterSelectionMode(account.id);
+                }
+                return true;
+            });
 
             // 菜单:修改 / 删除
             menu.setOnClickListener(v ->
@@ -317,6 +436,512 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
             container.addView(row);
         }
+    }
+
+    // ==================== 多选与批量操作 ====================
+
+    /**
+     * 进入多选模式,并选中长按的那个账号。
+     */
+    private void enterSelectionMode(long accountId)
+    {
+        selectionMode = true;
+        selectedIds.clear();
+        selectedIds.add(accountId);
+        updateSelectionUi();
+        showAccounts();
+    }
+
+    /**
+     * 退出多选模式。
+     */
+    private void exitSelectionMode()
+    {
+        selectionMode = false;
+        selectedIds.clear();
+        updateSelectionUi();
+        showAccounts();
+    }
+
+    /**
+     * 切换一个账号的选中状态。
+     * 直接更新当前行的勾选框,避免在渲染循环里重建整个列表。
+     */
+    private void toggleSelection(long accountId, CheckBox checkBox)
+    {
+        if (selectedIds.contains(accountId))
+        {
+            selectedIds.remove(accountId);
+        }
+        else
+        {
+            selectedIds.add(accountId);
+        }
+
+        if (selectedIds.isEmpty())
+        {
+            exitSelectionMode();
+            return;
+        }
+
+        checkBox.setChecked(selectedIds.contains(accountId));
+        updateSelectionUi();
+    }
+
+    /**
+     * 全选当前列表 / 取消全选。
+     */
+    private void toggleSelectAll()
+    {
+        if (!selectionMode)
+        {
+            return;
+        }
+
+        if (!accounts.isEmpty() && selectedIds.size() >= accounts.size())
+        {
+            exitSelectionMode();
+            return;
+        }
+
+        selectedIds.clear();
+        for (Account account : accounts)
+        {
+            selectedIds.add(account.id);
+        }
+
+        updateSelectionUi();
+        showAccounts();
+    }
+
+    /**
+     * 根据多选状态切换顶部栏、底部操作栏的显示。
+     */
+    private void updateSelectionUi()
+    {
+        int visible = selectionMode ? View.VISIBLE : View.GONE;
+        int normalVisible = selectionMode ? View.GONE : View.VISIBLE;
+
+        selectionBar.setVisibility(visible);
+        selectionActionsDivider.setVisibility(visible);
+        selectionActions.setVisibility(visible);
+
+        topBar.setVisibility(normalVisible);
+        searchBar.setVisibility(normalVisible);
+
+        if (selectionMode)
+        {
+            selectionCount.setText("已选 " + selectedIds.size() + " 个");
+
+            boolean allSelected = !accounts.isEmpty()
+                    && selectedIds.size() >= accounts.size();
+            selectionAll.setText(allSelected ? "取消全选" : "全选");
+        }
+    }
+
+    private List<Long> selectedIdList()
+    {
+        return new ArrayList<>(selectedIds);
+    }
+
+    /**
+     * 批量移动:选目标文件夹,把选中的账号一起移过去。
+     */
+    private void batchMove()
+    {
+        if (selectedIds.isEmpty())
+        {
+            return;
+        }
+
+        final List<Long> ids = selectedIdList();
+
+        folderRepository.getAll(folders ->
+        {
+            if (isFinishing() || isDestroyed())
+            {
+                return;
+            }
+
+            List<Folder> targets = new ArrayList<>();
+            for (Folder folder : folders)
+            {
+                if (folder.id != folderId)
+                {
+                    targets.add(folder);
+                }
+            }
+
+            if (targets.isEmpty())
+            {
+                Toast.makeText(this, "没有其他文件夹可移动", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            String[] names = new String[targets.size()];
+            for (int i = 0; i < targets.size(); i++)
+            {
+                names[i] = targets.get(i).name;
+            }
+
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("移动 " + ids.size() + " 个账号到")
+                    .setItems(names, (dialog, which) ->
+                    {
+                        Folder target = targets.get(which);
+
+                        accountRepository.moveAll(ids, target.id, count ->
+                        {
+                            if (isFinishing() || isDestroyed())
+                            {
+                                return;
+                            }
+
+                            if (count > 0)
+                            {
+                                Toast.makeText(this,
+                                        "已移动 " + count + " 个账号到「" + target.name + "」",
+                                        Toast.LENGTH_SHORT).show();
+                                exitSelectionMode();
+                                loadAccounts();
+                            }
+                            else
+                            {
+                                Toast.makeText(this, "移动失败", Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
+    }
+
+    /**
+     * 批量删除,先弹确认框。
+     */
+    private void batchDelete()
+    {
+        if (selectedIds.isEmpty())
+        {
+            return;
+        }
+
+        final List<Long> ids = selectedIdList();
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("删除账号")
+                .setMessage("确定删除选中的 " + ids.size() + " 个账号吗?此操作不可恢复。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) ->
+                {
+                    accountRepository.deleteAll(ids, count ->
+                    {
+                        if (isFinishing() || isDestroyed())
+                        {
+                            return;
+                        }
+
+                        Toast.makeText(this,
+                                "已删除 " + count + " 个账号",
+                                Toast.LENGTH_SHORT).show();
+                        exitSelectionMode();
+                        loadAccounts();
+                    });
+                })
+                .show();
+    }
+
+    /**
+     * 批量导出选中的账号。
+     */
+    private void batchExport()
+    {
+        if (selectedIds.isEmpty())
+        {
+            return;
+        }
+
+        showBatchExportDialog();
+    }
+
+    /**
+     * 批量导出的密码/保存位置弹窗,和首页的导出弹窗保持一致。
+     */
+    private void showBatchExportDialog()
+    {
+        View content = getLayoutInflater().inflate(R.layout.dialog_backup_export, null);
+
+        MaterialCheckBox cbEncrypt = content.findViewById(R.id.cb_encrypt);
+        View layoutPassword = content.findViewById(R.id.layout_backup_password);
+        EditText etPassword = content.findViewById(R.id.et_backup_password);
+        EditText etConfirm = content.findViewById(R.id.et_backup_password_confirm);
+        TextView tvWarning = content.findViewById(R.id.tv_export_warning);
+        TextView tvError = content.findViewById(R.id.tv_export_error);
+
+        cbEncrypt.setChecked(true);
+        layoutPassword.setVisibility(View.VISIBLE);
+        tvWarning.setVisibility(View.GONE);
+
+        cbEncrypt.setOnCheckedChangeListener((buttonView, checked) ->
+        {
+            layoutPassword.setVisibility(checked ? View.VISIBLE : View.GONE);
+            tvWarning.setVisibility(checked ? View.GONE : View.VISIBLE);
+        });
+
+        content.findViewById(R.id.btn_generate_password).setOnClickListener(v ->
+        {
+            String password = generateRandomPassword();
+            etPassword.setText(password);
+            etConfirm.setText(password);
+        });
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("导出选中的 " + selectedIds.size() + " 个账号")
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择保存位置", null)
+                .create();
+
+        // 和首页的导出弹窗一致:这里也提供“导出成表格”
+        content.findViewById(R.id.btn_export_table).setOnClickListener(v ->
+        {
+            dialog.dismiss();
+            showBatchCsvWarning();
+        });
+
+        dialog.setOnShowListener(d ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v ->
+                {
+                    boolean encrypt = cbEncrypt.isChecked();
+                    String password = textOf(etPassword);
+                    String confirm = textOf(etConfirm);
+
+                    tvError.setVisibility(View.GONE);
+
+                    if (!encrypt && (!password.isEmpty() || !confirm.isEmpty()))
+                    {
+                        showDialogError(tvError,
+                                "未勾选“使用密码加密”,密码会被忽略。请勾选加密,或清空密码后再导出。");
+                        return;
+                    }
+
+                    if (encrypt)
+                    {
+                        if (password.length() < 6)
+                        {
+                            showDialogError(tvError, "备份密码至少 6 位");
+                            return;
+                        }
+                        if (!password.equals(confirm))
+                        {
+                            showDialogError(tvError, "两次输入的密码不一致");
+                            return;
+                        }
+                    }
+
+                    pendingBatchEncrypt = encrypt;
+                    pendingBatchPassword = password;
+                    dialog.dismiss();
+
+                    createBatchBackupLauncher.launch(
+                            "sai-selected-" + System.currentTimeMillis() + ".json");
+                }));
+
+        dialog.show();
+    }
+
+    /**
+     * 用户选好保存位置后,只把选中的账号写进备份。
+     */
+    private void onBatchBackupFileChosen(Uri uri)
+    {
+        if (uri == null)
+        {
+            pendingBatchPassword = null;
+            return;
+        }
+
+        final boolean encrypt = pendingBatchEncrypt;
+        final String password = pendingBatchPassword;
+        final List<Long> ids = selectedIdList();
+        final long currentFolderId = folderId;
+        pendingBatchPassword = null;
+
+        AppExecutors.get().diskIO(() ->
+        {
+            String error = null;
+
+            try (OutputStream out = getContentResolver().openOutputStream(uri))
+            {
+                if (out == null)
+                {
+                    throw new IllegalStateException("无法写入文件");
+                }
+
+                byte[] data = BackupManager.exportData(
+                        this, encrypt, password, currentFolderId, ids);
+                out.write(data);
+                out.flush();
+            }
+            catch (Exception e)
+            {
+                error = e.getMessage();
+            }
+
+            final String finalError = error;
+            AppExecutors.get().main(() ->
+            {
+                if (isFinishing() || isDestroyed())
+                {
+                    return;
+                }
+
+                if (finalError == null)
+                {
+                    Toast.makeText(this,
+                            "已导出 " + ids.size() + " 个账号",
+                            Toast.LENGTH_LONG).show();
+                    exitSelectionMode();
+                }
+                else
+                {
+                    Toast.makeText(this,
+                            "导出失败: " + finalError,
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    /**
+     * 批量导出表格前,先确认明文风险。
+     */
+    private void showBatchCsvWarning()
+    {
+        final List<Long> ids = selectedIdList();
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("导出表格")
+                .setMessage("表格是明文,包含选中 " + ids.size()
+                        + " 个账号的密码。任何人打开都能看到,请只发给你信任的人,用完删除。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("继续", (dialog, which) ->
+                {
+                    pendingBatchCsvIds = ids;
+                    createBatchCsvLauncher.launch(
+                            "sai-selected-" + System.currentTimeMillis() + ".csv");
+                })
+                .show();
+    }
+
+    /**
+     * 用户选好位置后,只把选中的账号写进 CSV。
+     */
+    private void onBatchCsvFileChosen(Uri uri)
+    {
+        if (uri == null)
+        {
+            pendingBatchCsvIds = null;
+            return;
+        }
+
+        final List<Long> ids = pendingBatchCsvIds;
+        pendingBatchCsvIds = null;
+
+        if (ids == null || ids.isEmpty())
+        {
+            return;
+        }
+
+        AppExecutors.get().diskIO(() ->
+        {
+            String error = null;
+
+            try (OutputStream out = getContentResolver().openOutputStream(uri))
+            {
+                if (out == null)
+                {
+                    throw new IllegalStateException("无法写入文件");
+                }
+
+                byte[] data = TableExporter.exportCsv(this, folderId, ids);
+                out.write(data);
+                out.flush();
+            }
+            catch (Exception e)
+            {
+                error = e.getMessage();
+            }
+
+            final String finalError = error;
+            AppExecutors.get().main(() ->
+            {
+                if (isFinishing() || isDestroyed())
+                {
+                    return;
+                }
+
+                if (finalError == null)
+                {
+                    Toast.makeText(this,
+                            "已导出 " + ids.size() + " 个账号",
+                            Toast.LENGTH_LONG).show();
+                    exitSelectionMode();
+                    showBatchCsvShareDialog(uri);
+                }
+                else
+                {
+                    Toast.makeText(this,
+                            "导出失败: " + finalError,
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showBatchCsvShareDialog(Uri uri)
+    {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("表格已导出")
+                .setMessage("是否现在分享到微信/QQ?")
+                .setNegativeButton("完成", null)
+                .setPositiveButton("分享", (dialog, which) -> shareCsv(uri))
+                .show();
+    }
+
+    private void shareCsv(Uri uri)
+    {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/csv");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.setClipData(ClipData.newRawUri("accounts.csv", uri));
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(send, "分享表格"));
+    }
+
+    private String generateRandomPassword()
+    {
+        String chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*";
+        SecureRandom random = new SecureRandom();
+        StringBuilder builder = new StringBuilder(20);
+
+        for (int i = 0; i < 20; i++)
+        {
+            builder.append(chars.charAt(random.nextInt(chars.length())));
+        }
+
+        return builder.toString();
+    }
+
+    private String textOf(EditText editText)
+    {
+        return editText.getText() == null ? "" : editText.getText().toString();
+    }
+
+    private void showDialogError(TextView view, String message)
+    {
+        view.setText(message);
+        view.setVisibility(View.VISIBLE);
     }
 
     /**
@@ -344,6 +969,11 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             showReviseDialog();
             return true;
         }
+        else if (itemId == R.id.userMenuMove)
+        {
+            showMoveDialog();
+            return true;
+        }
         else if (itemId == R.id.userMenuDelete)
         {
             showWarningDialog();
@@ -369,6 +999,78 @@ public class UserActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
         EditAccountBottomSheet sheet = EditAccountBottomSheet.newInstance(temp.id);
         sheet.show(getSupportFragmentManager(), "修改账号");
+    }
+
+    /**
+     * 把当前账号移动到另一个文件夹。
+     */
+    private void showMoveDialog()
+    {
+        Account temp = getTempAccount();
+        if (temp == null)
+        {
+            Toast.makeText(getApplicationContext(), "未选择账号", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        folderRepository.getAll(folders ->
+        {
+            if (isFinishing() || isDestroyed())
+            {
+                return;
+            }
+
+            // 当前文件夹不用出现在“移动到”列表里
+            List<Folder> targets = new ArrayList<>();
+            for (Folder folder : folders)
+            {
+                if (folder.id != temp.folderId)
+                {
+                    targets.add(folder);
+                }
+            }
+
+            if (targets.isEmpty())
+            {
+                Toast.makeText(this, "没有其他文件夹可移动", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            String[] names = new String[targets.size()];
+            for (int i = 0; i < targets.size(); i++)
+            {
+                names[i] = targets.get(i).name;
+            }
+
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("移动到")
+                    .setItems(names, (dialog, which) ->
+                    {
+                        Folder target = targets.get(which);
+
+                        accountRepository.move(temp.id, target.id, success ->
+                        {
+                            if (isFinishing() || isDestroyed())
+                            {
+                                return;
+                            }
+
+                            if (success)
+                            {
+                                Toast.makeText(this,
+                                        "已移动到「" + target.name + "」",
+                                        Toast.LENGTH_SHORT).show();
+                                loadAccounts();
+                            }
+                            else
+                            {
+                                Toast.makeText(this, "移动失败", Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
     }
 
     private void showWarningDialog()

@@ -3,6 +3,7 @@ package com.galaxysai.saiaccountnote.ui.home;
 import com.galaxysai.saiaccountnote.App;
 import com.galaxysai.saiaccountnote.R;
 import com.galaxysai.saiaccountnote.backup.BackupManager;
+import com.galaxysai.saiaccountnote.backup.TableExporter;
 import com.galaxysai.saiaccountnote.common.SecureWindow;
 
 import android.content.ClipData;
@@ -43,7 +44,9 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 
+import com.galaxysai.saiaccountnote.data.entity.Account;
 import com.galaxysai.saiaccountnote.data.entity.Folder;
+import com.galaxysai.saiaccountnote.repository.AccountRepository;
 import com.galaxysai.saiaccountnote.repository.AppExecutors;
 import com.galaxysai.saiaccountnote.repository.FolderRepository;
 import com.galaxysai.saiaccountnote.security.SessionManager;
@@ -62,8 +65,10 @@ import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 
 /**
@@ -96,6 +101,15 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     /** 文件夹数据入口 */
     private FolderRepository folderRepository;
 
+    /** 账号数据入口,全局搜索用 */
+    private AccountRepository accountRepository;
+
+    /** 全部账号(跨文件夹) */
+    private List<Account> allAccounts = new ArrayList<>();
+
+    /** 当前搜索命中的账号 */
+    private List<Account> searchAccounts = new ArrayList<>();
+
     /** 侧边栏根布局 */
     private DrawerLayout drawerLayout;
 
@@ -108,6 +122,12 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
     /** 导出流程中暂存的加密选项 */
     private boolean pendingBackupEncrypt;
 
+    /** 导出范围:null 表示全部;否则只导出该文件夹 */
+    private Long pendingBackupFolderId;
+
+    /** 当前点击的文件夹 id,给“导出此文件夹”用 */
+    private long tempFolderId;
+
     /** 选择“导出到哪里” */
     private final ActivityResultLauncher<String> createBackupLauncher =
             registerForActivityResult(
@@ -119,6 +139,15 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             registerForActivityResult(
                     new ActivityResultContracts.OpenDocument(),
                     this::onBackupFileSelected);
+
+    /** 表格导出范围:null 表示全部;否则只导出该文件夹 */
+    private Long pendingCsvFolderId;
+
+    /** 选择表格保存位置 */
+    private final ActivityResultLauncher<String> createCsvLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.CreateDocument("text/csv"),
+                    this::onCsvFileChosen);
 
     /** 主题切换会重建 Activity,用这个标记让重建后自动重新打开侧边栏 */
     private static boolean reopenDrawerAfterThemeChange = false;
@@ -197,7 +226,8 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         });
 
         folderRepository = new FolderRepository(this);
-        loadTables();
+        accountRepository = new AccountRepository(this);
+        // 首屏数据统一在 onResume 里加载
     }
 
     /**
@@ -273,7 +303,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         if (id == R.id.drawer_export)
         {
             drawerLayout.closeDrawers();
-            showExportDialog();
+            showExportDialog(null);
             return true;
         }
         if (id == R.id.drawer_import)
@@ -320,8 +350,10 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
     /**
      * 导出备份:先选是否加密、设置密码,再让用户选择保存位置。
+     *
+     * @param folderId null 表示导出全部;否则只导出该文件夹
      */
-    private void showExportDialog()
+    private void showExportDialog(Long folderId)
     {
         View content = getLayoutInflater().inflate(R.layout.dialog_backup_export, null);
 
@@ -353,11 +385,18 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         });
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-                .setTitle("导出备份")
+                .setTitle(folderId == null ? "导出备份" : "导出文件夹")
                 .setView(content)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("选择保存位置", null)
                 .create();
+
+        // 表格导出:放在明文导出旁边,点击后走 CSV 保存流程
+        content.findViewById(R.id.btn_export_table).setOnClickListener(v ->
+        {
+            dialog.dismiss();
+            showCsvWarning(folderId);
+        });
 
         dialog.setOnShowListener(d ->
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v ->
@@ -392,10 +431,12 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
 
                     pendingBackupEncrypt = encrypt;
                     pendingBackupPassword = password;
+                    pendingBackupFolderId = folderId;
                     dialog.dismiss();
 
                     createBackupLauncher.launch(
-                            "sai-backup-" + timestampForFileName() + ".json");
+                            (folderId == null ? "sai-backup-" : "sai-folder-")
+                                    + timestampForFileName() + ".json");
                 }));
 
         dialog.show();
@@ -411,9 +452,11 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             return;
         }
 
+        final Long folderId = pendingBackupFolderId;
         final boolean encrypt = pendingBackupEncrypt;
         final String password = pendingBackupPassword;
         pendingBackupPassword = null;
+        pendingBackupFolderId = null;
 
         AppExecutors.get().diskIO(() ->
         {
@@ -426,7 +469,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                     throw new IllegalStateException("无法写入文件");
                 }
 
-                byte[] data = BackupManager.exportData(this, encrypt, password);
+                byte[] data = BackupManager.exportData(this, encrypt, password, folderId);
                 out.write(data);
                 out.flush();
             }
@@ -440,7 +483,9 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             {
                 if (finalError == null)
                 {
-                    Toast.makeText(this, "导出成功", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this,
+                            folderId == null ? "导出成功" : "文件夹导出成功",
+                            Toast.LENGTH_LONG).show();
                 }
                 else
                 {
@@ -448,6 +493,94 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 }
             });
         });
+    }
+
+    /**
+     * 导出表格(CSV):先提醒明文风险,再选保存位置。
+     */
+    private void showCsvWarning(Long folderId)
+    {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("导出表格")
+                .setMessage("表格是明文,包含所有密码。任何人打开都能看到,请只发给你信任的人,用完删除。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("继续", (dialog, which) ->
+                {
+                    pendingCsvFolderId = folderId;
+                    createCsvLauncher.launch(
+                            "sai-accounts-" + timestampForFileName() + ".csv");
+                })
+                .show();
+    }
+
+    /**
+     * 用户选好表格保存位置后,在后台写入 CSV。
+     */
+    private void onCsvFileChosen(Uri uri)
+    {
+        if (uri == null)
+        {
+            return;
+        }
+
+        final Long folderId = pendingCsvFolderId;
+        pendingCsvFolderId = null;
+
+        AppExecutors.get().diskIO(() ->
+        {
+            String error = null;
+
+            try (OutputStream out = getContentResolver().openOutputStream(uri))
+            {
+                if (out == null)
+                {
+                    throw new IllegalStateException("无法写入文件");
+                }
+
+                byte[] data = TableExporter.exportCsv(this, folderId, null);
+                out.write(data);
+                out.flush();
+            }
+            catch (Exception e)
+            {
+                error = e.getMessage();
+            }
+
+            final String finalError = error;
+            AppExecutors.get().main(() ->
+            {
+                if (finalError == null)
+                {
+                    showCsvShareDialog(uri);
+                }
+                else
+                {
+                    Toast.makeText(this,
+                            "导出失败: " + finalError,
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showCsvShareDialog(Uri uri)
+    {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("表格已导出")
+                .setMessage("是否现在分享到微信/QQ?")
+                .setNegativeButton("完成", null)
+                .setPositiveButton("分享", (dialog, which) -> shareCsv(uri))
+                .show();
+    }
+
+    private void shareCsv(Uri uri)
+    {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/csv");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.setClipData(ClipData.newRawUri("accounts.csv", uri));
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(send, "分享表格"));
     }
 
     /**
@@ -701,6 +834,22 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         }
     }
 
+    /**
+     * 每次回到首页都刷新一次。
+     *
+     * <p>从账号页返回时,账号可能被移动/删除,全局搜索结果要跟着变。</p>
+     */
+    @Override
+    protected void onResume()
+    {
+        super.onResume();
+
+        if (SessionManager.isUnlocked())
+        {
+            loadTables();
+        }
+    }
+
     private void loadTables()
     {
         folderRepository.getAll(list ->
@@ -709,10 +858,18 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             allFolders.addAll(list);
             applyFolderFilter();
         });
+
+        // 全局搜索需要全部账号
+        accountRepository.getAll(list ->
+        {
+            allAccounts.clear();
+            allAccounts.addAll(list);
+            applyFolderFilter();
+        });
     }
 
     /**
-     * 按搜索框内容过滤文件夹,再渲染。
+     * 按搜索框内容过滤文件夹和账号,再渲染。
      */
     private void applyFolderFilter()
     {
@@ -729,22 +886,46 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
             }
         }
 
+        // 只在有搜索词时搜账号;空搜索只展示文件夹
+        searchAccounts.clear();
+        if (!lower.isEmpty())
+        {
+            for (Account account : allAccounts)
+            {
+                String title = account.title == null ? "" : account.title;
+                String username = account.username == null ? "" : account.username;
+
+                if (title.toLowerCase(Locale.ROOT).contains(lower)
+                        || username.toLowerCase(Locale.ROOT).contains(lower))
+                {
+                    searchAccounts.add(account);
+                }
+            }
+        }
+
         showTables();
     }
 
     /**
-     * 把文件夹渲染成一行行列表项。
+     * 把文件夹和搜索到的账号渲染成一行行列表项。
      */
     private void showTables()
     {
         container.removeAllViews();
 
-        // 没有数据时显示空状态(区分“真没有”和“搜索无结果”)
-        tvEmpty.setVisibility(folders.isEmpty() ? View.VISIBLE : View.GONE);
         String query = etSearch == null ? "" : etSearch.getText().toString().trim();
+        boolean hasResults = !folders.isEmpty() || !searchAccounts.isEmpty();
+
+        // 没有数据时显示空状态(区分“真没有”和“搜索无结果”)
+        tvEmpty.setVisibility(hasResults ? View.GONE : View.VISIBLE);
         tvEmpty.setText(query.isEmpty()
                 ? "还没有文件夹,点右上角 + 新建一个"
-                : "没有找到匹配的文件夹");
+                : "没有找到匹配的文件夹或账号");
+
+        // 搜索时如果没有文件夹结果,就隐藏“文件夹”标题
+        View folderSection = findViewById(R.id.tv_folder_section);
+        folderSection.setVisibility(query.isEmpty() || !folders.isEmpty()
+                ? View.VISIBLE : View.GONE);
 
         for (Folder folder : folders)
         {
@@ -764,15 +945,83 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
                 startActivity(intent);
             });
 
-            // 右侧菜单 → 重命名 / 删除
+            // 右侧菜单 → 重命名 / 删除 / 导出
             menu.setOnClickListener(v ->
             {
+                tempFolderId = folder.id;
                 setTempTableName(folder.name);
                 showPopupMenu(menu);
             });
 
             container.addView(row);
         }
+
+        if (searchAccounts.isEmpty())
+        {
+            return;
+        }
+
+        // 账号分组标题
+        View header = LayoutInflater.from(this)
+                .inflate(R.layout.item_section_header, container, false);
+        TextView headerTitle = header.findViewById(R.id.tv_section_title);
+        headerTitle.setText("账号");
+        container.addView(header);
+
+        // 文件夹 id → 名字,给账号结果做副标题
+        Map<Long, String> folderNames = new HashMap<>();
+        for (Folder folder : allFolders)
+        {
+            folderNames.put(folder.id, folder.name);
+        }
+
+        for (Account account : searchAccounts)
+        {
+            View row = LayoutInflater.from(this)
+                    .inflate(R.layout.item_search_account, container, false);
+
+            TextView avatar = row.findViewById(R.id.tv_search_avatar);
+            TextView title = row.findViewById(R.id.tv_search_title);
+            TextView subtitle = row.findViewById(R.id.tv_search_subtitle);
+
+            String titleText = (account.title == null || account.title.trim().isEmpty())
+                    ? "未命名账号" : account.title;
+            String username = account.username == null ? "" : account.username.trim();
+            String folderName = folderNames.get(account.folderId);
+            if (folderName == null)
+            {
+                folderName = "未知文件夹";
+            }
+
+            avatar.setText(firstLetter(titleText));
+            title.setText(titleText);
+            subtitle.setText(username.isEmpty()
+                    ? folderName
+                    : username + " · " + folderName);
+
+            final String targetFolderName = folderName;
+            row.setOnClickListener(v ->
+            {
+                Intent intent = new Intent(this, UserActivity.class);
+                intent.putExtra("folderId", account.folderId);
+                intent.putExtra("folderName", targetFolderName);
+                startActivity(intent);
+            });
+
+            container.addView(row);
+        }
+    }
+
+    /**
+     * 取标题首字母做头像;空标题用问号。
+     */
+    private String firstLetter(String text)
+    {
+        if (text == null || text.trim().isEmpty())
+        {
+            return "?";
+        }
+        return text.trim().substring(0, 1).toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -800,7 +1049,7 @@ public class HomeActivity extends AppCompatActivity implements PopupMenu.OnMenuI
         int itemId = item.getItemId();
         if (itemId == R.id.tableMenuExport)
         {
-            Toast.makeText(getApplicationContext(), "点击了导出", Toast.LENGTH_SHORT).show();
+            showExportDialog(tempFolderId);
             return true;
         }
         else if (itemId == R.id.tableMenuRename)

@@ -14,9 +14,13 @@ import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.spec.KeySpec;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
@@ -57,7 +61,34 @@ public final class BackupManager
      */
     public static byte[] exportData(Context context, boolean encrypt, String password) throws Exception
     {
-        JSONObject payload = buildPayload(context);
+        return exportData(context, encrypt, password, null);
+    }
+
+    /**
+     * 生成指定范围的备份文件内容。
+     *
+     * @param encrypt  是否加密
+     * @param password 加密密码(encrypt=false 时忽略)
+     * @param folderId 只导出该文件夹;传 null 表示导出全部
+     */
+    public static byte[] exportData(Context context, boolean encrypt, String password,
+                                    Long folderId) throws Exception
+    {
+        return exportData(context, encrypt, password, folderId, null);
+    }
+
+    /**
+     * 生成指定范围的备份文件内容。
+     *
+     * @param encrypt    是否加密
+     * @param password   加密密码(encrypt=false 时忽略)
+     * @param folderId   只导出该文件夹;传 null 表示不按文件夹限制
+     * @param accountIds 只导出这些账号;传 null 表示不按账号限制
+     */
+    public static byte[] exportData(Context context, boolean encrypt, String password,
+                                    Long folderId, List<Long> accountIds) throws Exception
+    {
+        JSONObject payload = buildPayload(context, folderId, accountIds);
 
         JSONObject envelope = new JSONObject();
         envelope.put("format", FORMAT);
@@ -231,12 +262,67 @@ public final class BackupManager
         return new ImportResult(folderCount, accountCount);
     }
 
-    private static JSONObject buildPayload(Context context) throws Exception
+    private static JSONObject buildPayload(Context context, Long folderId,
+                                           List<Long> accountIds) throws Exception
     {
         AppDatabase db = AppDatabase.get(context);
 
-        List<Folder> folders = db.folderDao().getAll();
-        List<Account> accounts = db.accountDao().getAll();
+        List<Folder> folders;
+        List<Account> accounts;
+
+        if (accountIds != null && !accountIds.isEmpty())
+        {
+            // 只导出选中的账号:文件夹也要带上,导入时才能正确归类
+            accounts = db.accountDao().getByIds(accountIds);
+
+            Set<Long> folderIds = new LinkedHashSet<>();
+            for (Account account : accounts)
+            {
+                folderIds.add(account.folderId);
+            }
+
+            folders = new ArrayList<>();
+            for (Long id : folderIds)
+            {
+                Folder folder = db.folderDao().findById(id);
+                if (folder != null)
+                {
+                    folders.add(folder);
+                }
+            }
+
+            // 极端情况:选中的账号都查不到,但指定了文件夹,也把文件夹带上
+            if (folders.isEmpty() && folderId != null)
+            {
+                Folder folder = db.folderDao().findById(folderId);
+                if (folder != null)
+                {
+                    folders.add(folder);
+                }
+            }
+        }
+        else if (folderId == null)
+        {
+            // 全部导出
+            folders = db.folderDao().getAll();
+            accounts = db.accountDao().getAll();
+        }
+        else
+        {
+            // 只导出指定文件夹:文件夹本身 + 它下面的账号
+            Folder folder = db.folderDao().findById(folderId);
+
+            if (folder == null)
+            {
+                folders = Collections.emptyList();
+                accounts = Collections.emptyList();
+            }
+            else
+            {
+                folders = Collections.singletonList(folder);
+                accounts = db.accountDao().getByFolder(folderId);
+            }
+        }
 
         JSONArray folderArray = new JSONArray();
         for (Folder folder : folders)
@@ -268,7 +354,7 @@ public final class BackupManager
         }
 
         JSONObject payload = new JSONObject();
-        payload.put("appVersion", "1.0");
+        payload.put("appVersion", "1.1");
         payload.put("exportedAt", System.currentTimeMillis());
         payload.put("folders", folderArray);
         payload.put("accounts", accountArray);

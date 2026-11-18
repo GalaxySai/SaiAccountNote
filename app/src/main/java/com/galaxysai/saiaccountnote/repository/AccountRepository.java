@@ -45,6 +45,20 @@ public class AccountRepository
     }
 
     /**
+     * 查询全部账号(跨文件夹),首页全局搜索用。
+     *
+     * @param callback 结果回调:全部账号;没有数据时是空列表
+     */
+    public void getAll(Callback<List<Account>> callback)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            List<Account> accounts = db.accountDao().getAll();
+            AppExecutors.get().main(() -> callback.onResult(accounts));
+        });
+    }
+
+    /**
      * 按主键查询一个账号。
      *
      * @param accountId 账号主键
@@ -94,6 +108,83 @@ public class AccountRepository
 
             db.accountDao().update(account);
             AppExecutors.get().main(() -> callback.onResult(true));
+        });
+    }
+
+    /**
+     * 把一个账号移动到另一个文件夹。
+     *
+     * <p>只改 folderId 和 updatedAt,其它字段原样保留。</p>
+     *
+     * @param accountId 账号主键
+     * @param folderId  目标文件夹主键
+     * @param callback  结果回调:true 表示成功,false 表示账号/目标文件夹不存在
+     */
+    public void move(long accountId, long folderId, Callback<Boolean> callback)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            Account account = db.accountDao().findById(accountId);
+            boolean success = false;
+
+            // 账号和目标文件夹都必须存在
+            if (account != null && db.folderDao().findById(folderId) != null)
+            {
+                account.folderId = folderId;
+                account.updatedAt = System.currentTimeMillis();
+                db.accountDao().update(account);
+                success = true;
+            }
+
+            final boolean result = success;
+            AppExecutors.get().main(() -> callback.onResult(result));
+        });
+    }
+
+    /**
+     * 批量把一个文件夹里的多个账号移到另一个文件夹。
+     *
+     * @param accountIds 要移动的账号 id
+     * @param folderId   目标文件夹
+     * @param callback   结果回调:实际移动的行数
+     */
+    public void moveAll(List<Long> accountIds, long folderId, Callback<Integer> callback)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            int count = 0;
+
+            if (accountIds != null && !accountIds.isEmpty()
+                    && db.folderDao().findById(folderId) != null)
+            {
+                count = db.accountDao().moveToFolder(
+                        accountIds, folderId, System.currentTimeMillis());
+            }
+
+            final int result = count;
+            AppExecutors.get().main(() -> callback.onResult(result));
+        });
+    }
+
+    /**
+     * 批量删除账号。
+     *
+     * @param accountIds 要删除的账号 id
+     * @param callback   结果回调:实际删除的行数
+     */
+    public void deleteAll(List<Long> accountIds, Callback<Integer> callback)
+    {
+        AppExecutors.get().diskIO(() ->
+        {
+            int count = 0;
+
+            if (accountIds != null && !accountIds.isEmpty())
+            {
+                count = db.accountDao().deleteByIds(accountIds);
+            }
+
+            final int result = count;
+            AppExecutors.get().main(() -> callback.onResult(result));
         });
     }
 

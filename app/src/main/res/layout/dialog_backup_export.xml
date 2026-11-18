@@ -85,6 +85,24 @@
         android:textSize="13sp"
         android:visibility="gone" />
 
+    <!-- 表格导出:和明文导出放在一起,方便选择 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_export_table"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:text="导出成表格"
+        android:textColor="@color/accent" />
+
+    <TextView
+        android:id="@+id/tv_table_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="表格为明文,可用 Excel / WPS 打开"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
     <TextView
         android:id="@+id/tv_export_error"
         android:layout_width="match_parent"

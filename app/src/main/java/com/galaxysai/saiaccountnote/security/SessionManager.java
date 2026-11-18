@@ -11,8 +11,8 @@ package com.galaxysai.saiaccountnote.security;
  */
 public final class SessionManager
 {
-    /** 后台超过这个时间就自动锁定(5 分钟) */
-    private static final long AUTO_LOCK_TIMEOUT_MS = 5 * 60 * 1000L;
+    /** 后台超时时间(毫秒),默认 5 分钟,可在设置里改 */
+    private static long autoLockTimeoutMs = 5 * 60 * 1000L;
 
     /** 派生出的数据库密钥(之后给 SQLCipher 用) */
     private static byte[] dbKey;
@@ -50,13 +50,34 @@ public final class SessionManager
         }
 
         if (backgroundAt > 0
-                && System.currentTimeMillis() - backgroundAt >= AUTO_LOCK_TIMEOUT_MS)
+                && System.currentTimeMillis() - backgroundAt >= autoLockTimeoutMs)
         {
             lock();
             return false;
         }
 
         return true;
+    }
+
+    /**
+     * 设置自动锁定时间。
+     *
+     * @param timeoutMs 毫秒;小于等于 0 会被忽略
+     */
+    public static void setTimeoutMs(long timeoutMs)
+    {
+        if (timeoutMs > 0)
+        {
+            autoLockTimeoutMs = timeoutMs;
+        }
+    }
+
+    /**
+     * 当前自动锁定时间(毫秒)。
+     */
+    public static long getTimeoutMs()
+    {
+        return autoLockTimeoutMs;
     }
 
     /**
@@ -94,7 +115,7 @@ public final class SessionManager
     public static void onAppForeground()
     {
         if (unlocked && backgroundAt > 0
-                && System.currentTimeMillis() - backgroundAt >= AUTO_LOCK_TIMEOUT_MS)
+                && System.currentTimeMillis() - backgroundAt >= autoLockTimeoutMs)
         {
             lock();
         }

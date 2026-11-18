@@ -38,6 +38,29 @@ public interface AccountDao
     List<Account> getAll();
 
     /**
+     * 按一组 id 查账号,批量导出时用。
+     */
+    @Query("SELECT * FROM accounts WHERE id IN (:ids)")
+    List<Account> getByIds(List<Long> ids);
+
+    /**
+     * 批量移动:把多个账号移到同一个文件夹。
+     *
+     * @return 实际更新的行数
+     */
+    @Query("UPDATE accounts SET folder_id = :folderId, updated_at = :updatedAt " +
+            "WHERE id IN (:ids)")
+    int moveToFolder(List<Long> ids, long folderId, long updatedAt);
+
+    /**
+     * 批量删除。
+     *
+     * @return 实际删除的行数
+     */
+    @Query("DELETE FROM accounts WHERE id IN (:ids)")
+    int deleteByIds(List<Long> ids);
+
+    /**
      * 按主键查一个账号。
      *
      * @param id 账号主键

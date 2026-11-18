@@ -25,6 +25,9 @@ public class App extends Application
     public static final String PREFS_NAME = "settings";
     public static final String KEY_NIGHT_MODE = "night_mode";
 
+    /** 自动锁定时间(分钟),默认 5 分钟 */
+    public static final String KEY_AUTO_LOCK_MINUTES = "auto_lock_minutes";
+
     @Override
     public void onCreate()
     {
@@ -33,6 +36,10 @@ public class App extends Application
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         int mode = prefs.getInt(KEY_NIGHT_MODE, AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         AppCompatDelegate.setDefaultNightMode(mode);
+
+        // 自动锁定时间,默认 5 分钟
+        int lockMinutes = prefs.getInt(KEY_AUTO_LOCK_MINUTES, 5);
+        SessionManager.setTimeoutMs(lockMinutes * 60_000L);
 
         registerActivityLifecycleCallbacks(new AppLifecycleCallbacks());
     }

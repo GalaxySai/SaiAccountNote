@@ -21,6 +21,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import com.galaxysai.saiaccountnote.App;
 import com.galaxysai.saiaccountnote.R;
 import com.galaxysai.saiaccountnote.common.SecureWindow;
 import com.galaxysai.saiaccountnote.repository.AppExecutors;
@@ -72,6 +73,10 @@ public class SettingsActivity extends AppCompatActivity
 
         // 修改主密码
         findViewById(R.id.row_change_password).setOnClickListener(v -> showChangePasswordDialog());
+
+        // 自动锁定时间
+        findViewById(R.id.row_auto_lock).setOnClickListener(v -> showAutoLockDialog());
+        refreshAutoLockSubtitle();
 
         switchBiometric = findViewById(R.id.switch_biometric);
 
@@ -222,6 +227,56 @@ public class SettingsActivity extends AppCompatActivity
         updatingSwitch = true;
         switchBiometric.setChecked(checked);
         updatingSwitch = false;
+    }
+
+    /**
+     * 刷新“自动锁定”右侧的当前值。
+     */
+    private void refreshAutoLockSubtitle()
+    {
+        TextView value = findViewById(R.id.tv_auto_lock_value);
+        int minutes = getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                .getInt(App.KEY_AUTO_LOCK_MINUTES, 5);
+        value.setText(minutes + " 分钟");
+    }
+
+    /**
+     * 选择自动锁定时间:1 / 5 / 15 / 30 分钟。
+     */
+    private void showAutoLockDialog()
+    {
+        final int[] minutes = {1, 5, 15, 30};
+        final String[] labels = {"1 分钟", "5 分钟", "15 分钟", "30 分钟"};
+
+        int current = getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                .getInt(App.KEY_AUTO_LOCK_MINUTES, 5);
+        int checked = 1;
+        for (int i = 0; i < minutes.length; i++)
+        {
+            if (minutes[i] == current)
+            {
+                checked = i;
+                break;
+            }
+        }
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("自动锁定")
+                .setSingleChoiceItems(labels, checked, (dialog, which) ->
+                {
+                    int selected = minutes[which];
+
+                    getSharedPreferences(App.PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putInt(App.KEY_AUTO_LOCK_MINUTES, selected)
+                            .apply();
+
+                    SessionManager.setTimeoutMs(selected * 60_000L);
+                    refreshAutoLockSubtitle();
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /**

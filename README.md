@@ -41,7 +41,7 @@
 - 代码保持简单、可读，适合作为 Android 安全存储的练习项目；
 - 能导出加密备份，换手机时不丢数据。
 
-当前版本 **1.0**，已在真机验证主要流程。
+当前版本 **1.1**，已在真机验证主要流程。
 
 > 这是一个个人项目，**没有经过专业安全审计**。重要账号请自行评估风险，或使用成熟密码管理器。
 
@@ -53,29 +53,32 @@
 
 - 文件夹分类 + 账号增删改查
 - 账号字段：标题、用户名、密码、网址、绑定邮箱、绑定手机、备注
-- 搜索：按文件夹名 / 账号标题、用户名
+- 全局搜索：首页同时搜文件夹名、账号标题、用户名
 - 密码默认打码，可点击显示/隐藏
+- 一键复制用户名/密码，60 秒后自动清除剪贴板
 - 深色 / 浅色模式（侧边栏切换并持久化）
 - 主密码设置 / 解锁 / 修改
 - SQLCipher 整库加密
 - 指纹 / 面容解锁（Android Keystore + BiometricPrompt）
-- 后台 5 分钟自动锁定
+- 后台自动锁定（默认 5 分钟，可配置 1/5/15/30 分钟）
 - 防截屏（FLAG_SECURE，含所有弹窗）
 - 关闭系统备份（`allowBackup=false`）
 - 加密 JSON 备份导出 / 导入
 - 可选明文 JSON 导出（带风险提示）
+- 导出 CSV 表格（Excel/WPS 可打开），支持直接分享
+- 文件夹单独导出、按选中账号导出
 - 备份导入为追加模式，文件夹重名自动加 `-1`、`-2`
+- 账号可移动到其他文件夹
+- 批量多选：批量移动 / 删除 / 导出
+- 批量导出表格（选中账号直接 CSV）
 - 自适应应用图标 + 多尺寸 PNG
 
 ### 未实现（详见 [TODO](#已知限制与-todo)）
 
-- 一键复制账号/密码、剪贴板定时清空
 - 账号表单内密码生成器
 - 删除撤销 / 回收站
-- 账号跨文件夹移动、排序
+- 排序
 - 网址点击跳转
-- 全局账号搜索
-- 自动锁定时长可配置
 - 导入合并/去重
 - RecyclerView 重构
 - 单元测试 / CI
@@ -172,7 +175,7 @@ san.db (整库加密)
 
 - `App` 通过 `ActivityLifecycleCallbacks` 统计前台 Activity 数量；
 - 全部 stop 后记录时间；
-- 回前台时超过 5 分钟 → `SessionManager.lock()`，Activity 跳转解锁页；
+- 回前台时超过设定时间（默认 5 分钟，可在设置里改成 1/5/15/30 分钟）→ `SessionManager.lock()`，Activity 跳转解锁页；
 - 密钥只存在内存，进程被杀即清空。
 
 ### 4. 防泄露
@@ -268,7 +271,7 @@ CREATE TABLE accounts (
 - `data` 解密后是：
   ```json
   {
-    "appVersion": "1.0",
+    "appVersion": "1.1",
     "exportedAt": 1763200000000,
     "folders": [ { "id": 1, "name": "游戏", "sortOrder": 0, "createdAt": 0 } ],
     "accounts": [ { "id": 1, "folderId": 1, "title": "...", "username": "...", "password": "...", "url": null, "email": null, "phone": null, "notes": null, "createdAt": 0, "updatedAt": 0 } ]
@@ -279,6 +282,8 @@ CREATE TABLE accounts (
 - 导入为**追加**：不删除现有数据；文件夹重名加 `-1`、`-2`；账号原样追加。
 
 代码：`backup/BackupManager.java`、`security/CryptoUtils.java`。
+
+> 另提供人类可读的 **CSV 表格导出**（`backup/TableExporter.java`），用于 Excel/WPS 查看或分享；它和加密 JSON 备份相互独立，CSV 是明文。
 
 ---
 
@@ -293,8 +298,12 @@ SaiAccountNote/
 │       ├── AndroidManifest.xml
 │       ├── java/com/galaxysai/saiaccountnote/
 │       │   ├── App.java
-│       │   ├── backup/BackupManager.java
-│       │   ├── common/SecureWindow.java
+│       │   ├── backup/
+│       │   │   ├── BackupManager.java
+│       │   │   └── TableExporter.java
+│       │   ├── common/
+│       │   │   ├── ClipboardHelper.java
+│       │   │   └── SecureWindow.java
 │       │   ├── data/
 │       │   │   ├── AppDatabase.java
 │       │   │   ├── DatabaseMigration.java
@@ -402,15 +411,18 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 
 - [ ] 首次启动 → 设置主密码 → 进入首页
 - [ ] 新建文件夹 / 重命名 / 删除
-- [ ] 新建账号 → 展开详情 → 显示/隐藏密码
+- [ ] 新建账号 → 展开详情 → 显示/隐藏密码、复制用户名/密码（60 秒后剪贴板自动清空）
 - [ ] 修改账号 → 保存 → 列表刷新
 - [ ] 删除账号 → 确认框 → 删除
-- [ ] 首页/账号页搜索
+- [ ] 首页全局搜索：文件夹名、账号标题、用户名
+- [ ] 文件夹 `⋮` → 导出此文件夹；账号 `⋮` → 移动到
+- [ ] 长按账号 → 多选 → 批量移动 / 删除 / 导出（JSON、CSV）
+- [ ] 导出弹窗 → 导出成表格 → Excel/WPS 打开，中文正常
 - [ ] 深色/浅色切换（不闪、不关侧边栏）
 - [ ] 杀进程重开 → 需要解锁
 - [ ] 修改主密码 → 旧密码失效、新密码可解锁
 - [ ] 指纹/面容开启 → 杀进程 → 生物识别解锁
-- [ ] 后台超过 5 分钟 → 重新解锁
+- [ ] 设置 → 自动锁定改成 1 分钟 → 后台 1 分钟 → 重新解锁
 - [ ] 截屏 → 黑屏/空白
 - [ ] 加密导出 → 导入时要求备份密码
 - [ ] 明文导出 → 文件可读、导入不要求密码
@@ -420,28 +432,24 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 ### 测试注意
 
 - **生物识别、自动锁定、防截屏建议用真机测**；
-- 自动锁定默认 5 分钟，测试时可临时把 `SessionManager.AUTO_LOCK_TIMEOUT_MS` 改成 `10 * 1000L`；
+- 自动锁定默认 5 分钟，测试时在“设置 → 自动锁定”里改成 1 分钟，测完改回；
 - 模拟器镜像问题不代表 App 问题，先看崩溃栈是否包含 `com.galaxysai.saiaccountnote`。
 
 ---
 
 ## 已知限制与 TODO
 
-### P0（高频刚需）
+### P0（发布相关）
 
-- [ ] 复制账号/密码到剪贴板，并定时清空
-- [ ] 导出后直接分享到微信/QQ（目前需从文件管理器分享）
-- [ ] 自动锁定时长可配置
+- [ ] 正式签名（release keystore）
 
 ### P1（体验）
 
 - [ ] RecyclerView 重构列表
 - [ ] 删除撤销 / 回收站
-- [ ] 账号跨文件夹移动
 - [ ] 排序（时间/字母）
 - [ ] 网址点击跳转浏览器
 - [ ] 账号表单内密码生成器
-- [ ] 全局账号搜索
 
 ### P2（以后）
 
@@ -449,7 +457,6 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 - [ ] TOTP / 两步验证码
 - [ ] 标签 / 收藏
 - [ ] 自定义 Toast
-- [ ] CSV / Excel 导出
 - [ ] 单元测试 + CI
 - [ ] 多设备同步（与“纯本地”定位冲突，暂不做）
 
@@ -604,6 +611,9 @@ local.properties
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | 1.0 | 2026-11-15 | 首个可用版本：CRUD、加密、主密码、生物识别、自动锁定、备份、深色模式、图标与名称 |
+| 1.1 | 2026-11-18 | 文件夹导出、全局搜索、账号迁移、批量操作；复制+自动清剪贴板；CSV 表格导出/分享（含批量表格）；自动锁定时长可配置 |
+
+> 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
