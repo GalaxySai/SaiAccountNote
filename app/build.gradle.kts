@@ -1,5 +1,16 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
+}
+
+// 正式签名配置放在项目根目录的 keystore.properties(不提交到 Git)。
+// 没有这个文件时,Release 构建保持未签名,不影响 Debug 构建。
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
 android {
@@ -10,8 +21,8 @@ android {
         applicationId = "com.galaxysai.saiaccountnote"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1"
+        versionCode = 8
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -24,8 +35,21 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // 有 keystore.properties 时自动用正式签名;没有就保持未签名
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -58,6 +82,9 @@ dependencies {
 
     // 侧边栏(DrawerLayout)
     implementation(libs.drawerlayout)
+
+    // 列表(RecyclerView)
+    implementation(libs.recyclerview)
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

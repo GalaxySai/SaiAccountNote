@@ -29,6 +29,17 @@
         <activity android:name=".ui.unlock.UnlockActivity" />
 
         <activity android:name=".ui.settings.SettingsActivity" />
+
+        <!-- 分享 XLSX 表格:把缓存文件通过 FileProvider 暴露给微信/QQ 等 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

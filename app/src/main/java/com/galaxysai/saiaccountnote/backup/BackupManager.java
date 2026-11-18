@@ -354,7 +354,7 @@ public final class BackupManager
         }
 
         JSONObject payload = new JSONObject();
-        payload.put("appVersion", "1.1");
+        payload.put("appVersion", "1.2");
         payload.put("exportedAt", System.currentTimeMillis());
         payload.put("folders", folderArray);
         payload.put("accounts", accountArray);

@@ -41,7 +41,7 @@
 - 代码保持简单、可读，适合作为 Android 安全存储的练习项目；
 - 能导出加密备份，换手机时不丢数据。
 
-当前版本 **1.1**，已在真机验证主要流程。
+当前版本 **1.2**，已在真机验证主要流程。
 
 > 这是一个个人项目，**没有经过专业安全审计**。重要账号请自行评估风险，或使用成熟密码管理器。
 
@@ -65,22 +65,23 @@
 - 关闭系统备份（`allowBackup=false`）
 - 加密 JSON 备份导出 / 导入
 - 可选明文 JSON 导出（带风险提示）
-- 导出 CSV 表格（Excel/WPS 可打开），支持直接分享
+- 首页显示上次完整备份时间，以及之后是否有变更
+- 导出 Excel (.xlsx) 表格，表头加粗、冻结首行
+- 导出表格时可选“分享到微信/QQ（不保存本地）”
 - 文件夹单独导出、按选中账号导出
 - 备份导入为追加模式，文件夹重名自动加 `-1`、`-2`
 - 账号可移动到其他文件夹
-- 批量多选：批量移动 / 删除 / 导出
-- 批量导出表格（选中账号直接 CSV）
+- 批量多选：批量移动 / 删除 / 导出（JSON / Excel）
+- 文件夹和账号支持名称 A→Z / Z→A，文件夹按创建时间、账号按更新时间排序
+- 首页和账号页使用 RecyclerView
 - 自适应应用图标 + 多尺寸 PNG
 
 ### 未实现（详见 [TODO](#已知限制与-todo)）
 
 - 账号表单内密码生成器
 - 删除撤销 / 回收站
-- 排序
 - 网址点击跳转
 - 导入合并/去重
-- RecyclerView 重构
 - 单元测试 / CI
 
 ---
@@ -98,6 +99,7 @@
 | 数据库加密 | SQLCipher for Android | `net.zetetic:sqlcipher-android` 4.6.1 |
 | 生物识别 | `androidx.biometric` | 1.1.0 |
 | 侧边栏 | `androidx.drawerlayout` | 1.2.0 |
+| 列表 | `androidx.recyclerview` | 1.3.2 |
 | 布局 | ConstraintLayout | 2.1.4 |
 | 测试 | JUnit4 / AndroidX Test | 默认模板 |
 
@@ -271,7 +273,7 @@ CREATE TABLE accounts (
 - `data` 解密后是：
   ```json
   {
-    "appVersion": "1.1",
+    "appVersion": "1.2",
     "exportedAt": 1763200000000,
     "folders": [ { "id": 1, "name": "游戏", "sortOrder": 0, "createdAt": 0 } ],
     "accounts": [ { "id": 1, "folderId": 1, "title": "...", "username": "...", "password": "...", "url": null, "email": null, "phone": null, "notes": null, "createdAt": 0, "updatedAt": 0 } ]
@@ -283,7 +285,7 @@ CREATE TABLE accounts (
 
 代码：`backup/BackupManager.java`、`security/CryptoUtils.java`。
 
-> 另提供人类可读的 **CSV 表格导出**（`backup/TableExporter.java`），用于 Excel/WPS 查看或分享；它和加密 JSON 备份相互独立，CSV 是明文。
+> 另提供人类可读的 **Excel (.xlsx) 表格导出**（`backup/TableExporter.java` + `backup/XlsxWriter.java`），可直接分享到微信/QQ；它和加密 JSON 备份相互独立，Excel 是明文。
 
 ---
 
@@ -300,10 +302,15 @@ SaiAccountNote/
 │       │   ├── App.java
 │       │   ├── backup/
 │       │   │   ├── BackupManager.java
-│       │   │   └── TableExporter.java
+│       │   │   ├── BackupStatus.java
+│       │   │   ├── TableExporter.java
+│       │   │   └── XlsxWriter.java
 │       │   ├── common/
 │       │   │   ├── ClipboardHelper.java
-│       │   │   └── SecureWindow.java
+│       │   │   ├── SecureWindow.java
+│       │   │   ├── ShareHelper.java
+│       │   │   ├── SimpleAdapter.java
+│       │   │   └── SortMode.java
 │       │   ├── data/
 │       │   │   ├── AppDatabase.java
 │       │   │   ├── DatabaseMigration.java
@@ -388,20 +395,27 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 签名与发布
 
-当前项目**没有配置正式签名**，Release 构建默认不会用 debug 签名（取决于 Gradle 配置）。发布前请：
+项目已支持**正式签名**：在项目根目录创建 `keystore.properties`（可参考 `keystore.properties.example`），填入：
 
-1. 生成 keystore：
-
-```bash
-keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias san
+```properties
+storeFile=C:/path/to/your-release.jks
+storePassword=你的 store 密码
+keyAlias=你的别名
+keyPassword=你的 key 密码
 ```
 
-2. 在 `app/build.gradle.kts` 配置 `signingConfigs`，或在 Android Studio 的 **Build → Generate Signed Bundle/APK** 中操作；
-3. **不要提交** `*.jks` / `*.keystore` / 密码；
-4. 每次发版：
-   - `versionCode` 加 1；
-   - `versionName` 更新（如 `1.0` → `1.1`）；
-   - 保留上一版 APK，便于回滚。
+`app/build.gradle.kts` 会自动读取它：
+- 有该文件：Release 用你的 JKS 自动签名；
+- 没有：Release 保持未签名，Debug 不受影响。
+
+`keystore.properties`、`*.jks`、`*.keystore` 已在 `.gitignore` 中，**不要提交**。
+
+> 切换签名（debug → 正式）会导致无法覆盖安装。先在旧版导出加密备份，再卸载、安装正式签名版、重新导入；不要直接卸载丢数据。
+
+每次发版：
+- `versionCode` 加 1；
+- `versionName` 更新；
+- 保留上一版 APK，便于回滚。
 
 ---
 
@@ -416,8 +430,11 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 - [ ] 删除账号 → 确认框 → 删除
 - [ ] 首页全局搜索：文件夹名、账号标题、用户名
 - [ ] 文件夹 `⋮` → 导出此文件夹；账号 `⋮` → 移动到
-- [ ] 长按账号 → 多选 → 批量移动 / 删除 / 导出（JSON、CSV）
-- [ ] 导出弹窗 → 导出成表格 → Excel/WPS 打开，中文正常
+- [ ] 长按账号 → 多选 → 批量移动 / 删除 / 导出（JSON、Excel）
+- [ ] 导出弹窗 → 导出成 Excel → 分享（不保存本地）/ 保存到本地，Excel/WPS 打开中文正常
+- [ ] 首页显示上次完整备份时间和变更状态；完整导出后变为“已是最新”
+- [ ] 首页/账号页排序：名称 A→Z、Z→A、时间升降序，重启后保持
+- [ ] 首页和账号页滚动，展开详情/密码显示/多选状态不串行
 - [ ] 深色/浅色切换（不闪、不关侧边栏）
 - [ ] 杀进程重开 → 需要解锁
 - [ ] 修改主密码 → 旧密码失效、新密码可解锁
@@ -441,13 +458,11 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 
 ### P0（发布相关）
 
-- [ ] 正式签名（release keystore）
+- [ ] 配置 `keystore.properties` 并验证正式签名
 
 ### P1（体验）
 
-- [ ] RecyclerView 重构列表
 - [ ] 删除撤销 / 回收站
-- [ ] 排序（时间/字母）
 - [ ] 网址点击跳转浏览器
 - [ ] 账号表单内密码生成器
 
@@ -463,7 +478,6 @@ keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity
 ### 已知限制
 
 - 搜索是内存过滤，不适合上万条数据；
-- 列表是手动 `LinearLayout`，没有 RecyclerView 的复用/动画；
 - 生物识别只支持强生物识别；
 - 加密备份的密码无法找回；
 - 主密码无法找回；
@@ -612,6 +626,8 @@ local.properties
 |---|---|---|
 | 1.0 | 2026-11-15 | 首个可用版本：CRUD、加密、主密码、生物识别、自动锁定、备份、深色模式、图标与名称 |
 | 1.1 | 2026-11-18 | 文件夹导出、全局搜索、账号迁移、批量操作；复制+自动清剪贴板；CSV 表格导出/分享（含批量表格）；自动锁定时长可配置 |
+| 1.1.1 | 2026-11-18 | 修复多选勾选框错位、表格改名后分享找不到文件、剪贴板到期未清除 |
+| 1.2 | 2026-11-18 | 备份状态提醒、排序、RecyclerView、Excel (.xlsx) 导出/直接分享、正式签名配置 |
 
 > 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。
 

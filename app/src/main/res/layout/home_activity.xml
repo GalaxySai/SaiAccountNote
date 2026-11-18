@@ -49,6 +49,17 @@
             android:textStyle="bold" />
 
         <ImageButton
+            android:id="@+id/home_sort"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@null"
+            android:contentDescription="排序"
+            android:padding="12dp"
+            android:scaleType="centerInside"
+            app:srcCompat="@drawable/ic_sort_24"
+            app:tint="@color/text_primary" />
+
+        <ImageButton
             android:id="@+id/home_add"
             android:layout_width="48dp"
             android:layout_height="48dp"
@@ -103,6 +114,24 @@
             android:textSize="15sp" />
     </LinearLayout>
 
+    <!-- ===== 备份状态:上次完整备份时间 + 之后是否有变更 ===== -->
+    <TextView
+        android:id="@+id/tv_backup_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="16dp"
+        android:background="?attr/selectableItemBackground"
+        android:maxLines="2"
+        android:paddingStart="4dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="4dp"
+        android:paddingBottom="4dp"
+        android:text="还没有备份,点此导出"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
     <!-- ===== 分组标题 ===== -->
     <TextView
         android:id="@+id/tv_folder_section"
@@ -122,17 +151,12 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <ScrollView
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/home_recycler"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:overScrollMode="never">
-
-            <LinearLayout
-                android:id="@+id/home_table_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </ScrollView>
+            android:clipToPadding="false"
+            android:overScrollMode="never" />
 
         <TextView
             android:id="@+id/tv_empty"
